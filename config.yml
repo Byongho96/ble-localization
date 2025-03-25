@@ -1,0 +1,13 @@
+anchors:
+  6501:
+    position: [0, 300]
+    orientation: 90
+  6502:
+    position: [600, 0]
+    orientation: 0
+  6503:
+    position: [1200, 300]
+    orientation: 270
+  6504:
+    position: [600, 600]
+    orientation: 180
