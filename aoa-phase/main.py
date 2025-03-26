@@ -1,63 +1,53 @@
 import os
 import yaml
 import pandas as pd
-import utils as utils
+import data_processing as dp
+import aoa_filter as af
+import visualize as vs
 
-def aoa_kf(df):
-    all_results = {}
+def aoa_kf(dic: dict, delta: int):
+    all_anchors_results = {}
 
-    for anchor_id, anchor_df in df.groupby("AnchorID"):
+    for anchor_id, anchor_df in dic.items():
 
         anchor_results = {
             'raw': [],
-            'kf': [],
+            'maf': [],
+            'median': [],
+            'low_pass': [],
+            '1d_kf': [],
+            '2d_kf': [],
         }
 
+        # Filter the data
         for (x, y), point_df in anchor_df.groupby(["X_Real", "Y_Real"]):
-            
-            # Raw AoA
             anchor_results['raw'].append(point_df)
-
-            # EKF for each anchors' AoA
-            anchor_results['kf'].append(utils.aoa_1d_kalman_filter(point_df))
-
+            anchor_results['maf'].append(af.aoa_moving_average_filter(point_df))
+            anchor_results['median'].append(af.aoa_median_filter(point_df))
+            anchor_results['low_pass'].append(af.aoa_low_pass_filter(point_df))
+            anchor_results['1d_kf'].append(af.aoa_1d_kalman_filter(point_df))
+            anchor_results['2d_kf'].append(af.aoa_2d_kalman_filter(point_df, delta))
 
         # Concatenate the results
         for key in anchor_results:
             anchor_results[key] = pd.concat(anchor_results[key], ignore_index=True)
         
-        all_results[anchor_id] = anchor_results
-
-    # Regroup the results
-    results_by_method = {
-        'raw': {},
-        'kf': {},
-    }
-
-    for anchor_id, anchor_results in all_results.items():
-        for key in anchor_results:
-            results_by_method[key][anchor_id] = anchor_results[key]
+        all_anchors_results[anchor_id] = anchor_results
 
     # Show the results
-    utils.visualize_all_anchors_with_heatmap(results_by_method['raw'], 'Azimuth_Real', 'Azimuth', 0, 15)
-    utils.visualize_all_anchors_with_heatmap(results_by_method['raw'], 'Azimuth_Real', 'Azimuth_KF', 0, 15)
-
-
-def aoa_local_kf(df):
-    for x, y in [1, 2, 3, 4, 5]:
-        pass
-        # KF for each anchors' AoA
-        
-
-        # UKF for each anchors' AoA
-
-        # PK for each anchors' AoA
-
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results['raw'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth', vmin=0, vmax=15, title="Raw AoA")   
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results['maf'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_MAF', vmin=0, vmax=15, title="MAF AoA")
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results['median'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_Median', vmin=0, vmax=15, title="Median AoA")
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results['low_pass'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_LowPass', vmin=0, vmax=15, title="Low Pass AoA")
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results['1d_kf'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_1d_KF', vmin=0, vmax=15, title="1D KF AoA")
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results['2d_kf'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_2d_KF', vmin=0, vmax=15, title="2D KF AoA")
 
 def main():
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
+    # Load files
     config = yaml.safe_load(open(os.path.join(base_dir, "../config.yml")))
+    delta = config['delta']
 
     gt_path = os.path.join(base_dir, "../dataset/calibration/gt/gt_calibration.csv")
     gt_df = pd.read_csv(gt_path)
@@ -65,10 +55,22 @@ def main():
     ms_path = os.path.join(base_dir, "../dataset/calibration/beacons/beacons_calibration.csv")
     ms_df = pd.read_csv(ms_path)
 
-    filtered_df = utils.filter_and_match_ground_truth(gt_df, ms_df, config)
+    # Group by anchors
+    anchors_df_dict = { anchor_id: anchor_df for anchor_id, anchor_df in ms_df.groupby("AnchorID") }
 
-    # aoa_kf(filtered_df)
-    aoa_local_kf(filtered_df)
+    # Preprocess the data
+    for anchor_id, anchor_df in anchors_df_dict.items():
+        position = config['anchors'][anchor_id]['position']   
+        orientation = config['anchors'][anchor_id]['orientation']
+    
+        anchor_gt_df = dp.filter_with_position_ground_truth(gt_df, anchor_df)
+        anchor_gt_discretized_df = dp.discretize_grid_points_by_delta(anchor_gt_df, delta)
+        anchor_gt_discretized_aoa_df = dp.calculate_aoa_ground_truth(anchor_gt_discretized_df, position, orientation)
+
+        anchors_df_dict[anchor_id] = anchor_gt_discretized_aoa_df
+
+    aoa_kf(anchors_df_dict, delta)
+    # aoa_local_kf(filtered_df)
 
 if __name__ == '__main__':
     main()
