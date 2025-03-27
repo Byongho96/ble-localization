@@ -25,7 +25,7 @@ def filter_with_position_ground_truth(gt_df: pd.DataFrame, ms_df: pd.DataFrame) 
         
     return pd.concat(filtered_data, ignore_index=True) if filtered_data else pd.DataFrame()
 
-def calculate_aoa_ground_truth(df: pd.DataFrame, position: list[int, int, int], orientation: int) -> pd.DataFrame:
+def calculate_aoa_ground_truth(df: pd.DataFrame, position: list[float, float, float], orientation: float) -> pd.DataFrame:
     '''
     Calculate the real azimuth from the ground truth data and add it to the DataFrame.
 
@@ -42,13 +42,10 @@ def calculate_aoa_ground_truth(df: pd.DataFrame, position: list[int, int, int], 
     # Calculate the azimuth from the ground truth data
     dx = result_df["X_Real"] - position[0] 
     dy = result_df["Y_Real"] - position[1]
-    azimuth_real = np.degrees(np.arctan2(dx, dy)) - orientation
 
-    # Normalize angle to [-90, 90] range as implied by your original conditions
-    azimuth_real = np.where(azimuth_real < -450, azimuth_real + 540, azimuth_real)
-    azimuth_real = np.where(azimuth_real < -270, azimuth_real + 360, azimuth_real)
-    azimuth_real = np.where(azimuth_real < -90,  azimuth_real + 180, azimuth_real)
-
+    # Calculate the azimuth in the real world
+    azimuth_real = np.arctan2(dx, dy) - np.radians(orientation)
+    azimuth_real = np.degrees((azimuth_real + np.pi) % (2 * np.pi) - np.pi)
     result_df["Azimuth_Real"] = azimuth_real
 
     return result_df

@@ -49,3 +49,34 @@ def discretize_grid_points_by_delta(df: pd.DataFrame, dt: int = 0) -> pd.DataFra
     discretized_df["Timestamp"] = discretized_df["Time_Bucket"] + dt
 
     return discretized_df
+
+
+def prepare_merged_dataframe(dic: dict) -> pd.DataFrame:
+    """
+    Merge multiple DataFrames into a single DataFrame by Time_Bucket.
+
+    Parameters:
+        dic (dict): Dictionary containing multiple DataFrames with Time_Bucket columns
+
+    Returns:
+        pd.DataFrame: Merged DataFrame with prefix added to columns
+    """
+    dfs = []
+    for i, (anchor_id, df) in enumerate(dic.items()):
+        df_temp = df.copy().set_index("Time_Bucket")
+        if i == 0:
+            # For the base anchor, keep "X_Real" and "Y_Real" columns unchanged,
+            # and add prefix to the rest of the columns.
+            non_xy = [col for col in df_temp.columns if col not in ["X_Real", "Y_Real"]]
+            df_prefixed = df_temp[non_xy].add_prefix(f"{anchor_id}_")
+            df_temp = pd.concat([df_temp[["X_Real", "Y_Real"]], df_prefixed], axis=1)
+        else:
+            # For other anchors, drop "X_Real" and "Y_Real" (to avoid duplicates),
+            # and add prefix to all remaining columns.
+            df_temp = df_temp.drop(columns=["X_Real", "Y_Real"], errors="ignore")
+            df_temp = df_temp.add_prefix(f"{anchor_id}_")
+        dfs.append(df_temp)
+        
+    # Merge the DataFrames by Time_Bucket
+    merged_df = pd.concat(dfs, axis=1, join="inner")
+    return merged_df

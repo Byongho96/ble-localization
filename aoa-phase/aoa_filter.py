@@ -53,7 +53,7 @@ def aoa_low_pass_filter(df: pd.DataFrame, alpha: float = 0.1) -> pd.DataFrame:
     df["Azimuth_LowPass"] = filtered_azimuths
     return df
 
-def aoa_1d_kalman_filter(df: pd.DataFrame) -> pd.DataFrame:
+def aoa_1d_kalman_filter(df: pd.DataFrame, dt: float = 0.02) -> pd.DataFrame:
     '''
     AoA 1D Kalman Filter
 
@@ -70,7 +70,7 @@ def aoa_1d_kalman_filter(df: pd.DataFrame) -> pd.DataFrame:
     kf.H = np.array([1])
     kf.P *= 1000.
     kf.R *= 5  # Measurement noise : [U-blox C211 5 degree]
-    kf.Q *= 0  # Process noise proportional to the dt
+    kf.Q *= dt  # Process noise
 
     filtered_azimuths = []
 

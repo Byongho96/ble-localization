@@ -31,7 +31,7 @@ def visualize_distance_error_with_heatmap(df: pd.DataFrame, x_gt_column: str, y_
     print(f"Mean Error: {mean_error:.2f}, Std Error: {std_error:.2f}")
 
     plt.figure(figsize=(10, 6))
-    sc = plt.scatter(df["X_Real"], df["Y_Real"], c=error_df["Distance_Error"], cmap='coolwarm', s=100, vmin=vmin, vmax=vmax)
+    sc = plt.scatter(df[x_gt_column], df[y_gt_column], c=error_df["Distance_Error"], cmap='coolwarm', s=100, vmin=vmin, vmax=vmax)
     cbar = plt.colorbar(sc)
     cbar.set_label("Distance Error")
     

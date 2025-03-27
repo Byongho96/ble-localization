@@ -5,21 +5,26 @@ import data_processing as dp
 import localization_filter as lf
 import visualize as vs
 
-def aoa_local_kf(dic: dict, config: dict, delta: int):
+def aoa_local_kf(df: pd.DataFrame, anchor_ids: list[int], config: dict, delta: int):
     all_results = {
         'raw': [],
-        'kf': [],
-        # 'ekf': [],
-        # 'ukf': [],
-        # 'pf': [],
+        '2d_kf': [],
+        '3d_kf': [],
+        'ekf': [],
+        'ukf': [],
+        'pf': [],
     }
 
-    all_results['raw'] = lf.least_squares_triangulation(dic, config)
-    # all_results['kf'] = lf.kalman_filter(dic, config, delta)
+    # all_results['raw'] = lf.least_squares_triangulation(df, config, anchor_ids)
+    # all_results['2d_kf'] = lf.local_2D_kalman_filter(all_results['raw'], delta)
+    all_results['ukf'] = lf.local_unscented_kalman_filter(df, config, anchor_ids, delta)
+    # all_results['pf'] = lf.local_particle_filter(df, config, anchor_ids, delta)
 
     # Show the results
-    vs.visualize_distance_error_with_heatmap(all_results['raw'], 'X_Real', 'Y_Real', 'X_LS', 'Y_LS', vmin=0, vmax=300, title="Raw Local")
-    # vs.visualize_all_anchors_with_heatmap({anchor_id: results['kf'] for anchor_id, results in all_anchors_results.items()}, 'X_Real', 'Y_Real', 'X_KF', 'Y_KF', vmin=0, vmax=2, title="KF Local")
+    # vs.visualize_distance_error_with_heatmap(all_results['raw'], 'X_Real', 'Y_Real', 'X_LS', 'Y_LS', vmin=0, vmax=200, title="Raw Local")
+    # vs.visualize_distance_error_with_heatmap(all_results['2d_kf'], 'X_Real', 'Y_Real', 'X_2D_KF', 'Y_2D_KF', vmin=0, vmax=300, title="2D Kalman Local")
+    vs.visualize_distance_error_with_heatmap(all_results['ukf'], 'X_Real', 'Y_Real', 'X_UKF', 'Y_UKF', vmin=0, vmax=300, title="Unscented Local")
+    # vs.visualize_distance_error_with_heatmap(all_results['pf'], 'X_Real', 'Y_Real', 'X_PF', 'Y_PF', vmin=0, vmax=300, title="Particle Local")
 
 
 def main():
@@ -46,7 +51,10 @@ def main():
 
         anchors_df_dict[anchor_id] = anchor_discretized_df
 
-    aoa_local_kf(anchors_df_dict, config, delta)
+    anchor_ids = list(config['anchors'].keys())
+    anchors_df = dp.prepare_merged_dataframe(anchors_df_dict)  
+
+    aoa_local_kf(anchors_df, anchor_ids, config, delta)
 
 if __name__ == '__main__':
     main()
