@@ -1,7 +1,7 @@
 import math
 import numpy as np
 import pandas as pd
-from filterpy.kalman import KalmanFilter, UnscentedKalmanFilter, MerweScaledSigmaPoints
+from filterpy.kalman import KalmanFilter, ExtendedKalmanFilter, UnscentedKalmanFilter, MerweScaledSigmaPoints
 from ParticleFilter import ParticleFilter
 
 def least_squares_triangulation(df: pd.DataFrame, config: dict, anchor_ids: list) -> pd.DataFrame:
@@ -85,16 +85,139 @@ def local_2D_kalman_filter(df: pd.DataFrame, dt: float = 0.02) -> pd.DataFrame:
     df["X_2D_KF"], df["Y_2D_KF"] = zip(*filtered_positions)
     return df
 
-def local_extended_kalman_filter(df: pd.DataFrame, dt: float = 0.02) -> pd.DataFrame:
-    pass
+def local_extended_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: list, dt: float = None) -> pd.DataFrame:
+    """
+    Local Extended Kalman Filter applied for each group based on ("X_Real", "Y_Real").
 
+    Parameters:
+        df (pd.DataFrame): Result from prepare_merged_dataframe(), with the index as Time_Bucket.
+                                  Each anchor's columns are in the format:
+                                  ["X_Real", "Y_Real", f"{anchor1_id}_Azimuth}", f"{anchor2_id}_Azimuth}"].
+        dt (float): Time interval in seconds.
+    
+    Returns:
+        pd.DataFrame: DataFrame with columns ["Time_Bucket", "X_Real", "Y_Real", "X_EKF", "Y_EKF"].
+    """
+    print("Start the Extended Kalman Filter Process")
+    
+    dt /= 1000  # ms -> sec
+    num_anchors = len(anchor_ids)
+    anchors_position = np.array([config["anchors"][aid]["position"] for aid in anchor_ids])
+    anchors_orientation = np.array([config["anchors"][aid]["orientation"] for aid in anchor_ids])
+    
+    # State Transition Function
+    def fx(x, dt):
+        dt2 = 0.5 * dt**2
+        F = np.array([
+            [1, 0, dt, 0, dt2, 0],
+            [0, 1, 0, dt, 0, dt2],
+            [0, 0, 1, 0, dt, 0],
+            [0, 0, 0, 1, 0, dt],
+            [0, 0, 0, 0, 1, 0],
+            [0, 0, 0, 0, 0, 1]
+        ])
+        return F @ x
+    fx_lambda = lambda x, dt: fx(x, dt) # Convert to lambda function with captured dt
 
-def local_unscented_kalman_filter(merged_df: pd.DataFrame, config: dict, anchor_ids: list, dt: float = None) -> pd.DataFrame:
+    # Jacobian of the state transition function. Same as F in this case
+    def FJacobian(x, dt):
+        dt2 = 0.5 * dt**2
+        F = np.array([
+            [1, 0, dt, 0, dt2, 0],
+            [0, 1, 0, dt, 0, dt2],
+            [0, 0, 1, 0, dt, 0],
+            [0, 0, 0, 1, 0, dt],
+            [0, 0, 0, 0, 1, 0],
+            [0, 0, 0, 0, 0, 1]
+        ])
+        return F
+    FJacobian_lambda = lambda x, dt: FJacobian(x, dt) # Convert to lambda function with captured dt
+
+    # Measurement Function
+    def hx(x):
+        pos = x[:2]
+        predicted_angles = []
+        for (ax, ay), a_ori in zip(anchors_position, anchors_orientation):
+            angle = np.arctan2(pos[0] - ax, pos[1] - ay) * 180/np.pi - a_ori
+            angle = (angle + 180) % 360 - 180
+            predicted_angles.append(angle)
+        return np.array(predicted_angles)
+
+    
+    # Jacobian of the measurement function
+    def HJacobian(x):
+        H = np.zeros((num_anchors, 6))
+        for i, a_pos in enumerate(anchors_position):
+            r = x[0] - a_pos[0]
+            s = x[1] - a_pos[1]
+            denom = r**2 + s**2
+            if denom == 0:
+                H[i, 0] = 0
+                H[i, 1] = 0
+            else:
+                H[i, 0] = (180/np.pi) * (s / denom)
+                H[i, 1] = (180/np.pi) * (-r / denom)
+        return H
+
+    state_bounds = config.get("state_bounds", (0, 1200, 0, 600))
+    min_x, max_x, min_y, max_y = state_bounds
+    
+    estimated_positions = []
+    THRESHOLD = 100
+
+    # Run the EKF for each group based on ("X_Real", "Y_Real").
+    for (x_real, y_real), group_df in df.groupby(["X_Real", "Y_Real"]):
+
+        ekf = ExtendedKalmanFilter(dim_x=6, dim_z=num_anchors)
+        initial_state = np.array([
+            np.random.uniform(min_x, max_x),
+            np.random.uniform(min_y, max_y),
+            0.0, 0.0,
+            0.0, 0.0
+        ])
+        ekf.x = initial_state.copy()
+        ekf.P = np.eye(6) * 500.0
+
+        ekf.R = np.eye(num_anchors) * (6.0**2) # angle noise std = 6.0
+        
+        ekf.fx = fx_lambda
+        ekf.FJacobian = FJacobian_lambda
+        
+        th = 0
+        for time_bucket, row in group_df.iterrows():
+            measured_aoa = np.array([row[f"{aid}_Azimuth"] for aid in anchor_ids])
+            
+            # Adaptive Process Noise
+            vel = np.linalg.norm(ekf.x[2:4])
+            if vel < 0.1:
+                ekf.Q = np.diag([0.1, 0.1, 0.1, 0.1, 0.05, 0.05])
+            else:
+                ekf.Q = np.diag([1.0, 1.0, 1.0, 1.0, 0.5, 0.5])
+            
+            # Prediction
+            ekf.predict()
+
+            # Update
+            ekf.update(measured_aoa, HJacobian, hx)
+            
+            # Record the estimated position if the threshold is reached.
+            th += 1
+            if th < THRESHOLD:
+                continue
+
+            x_ekf, y_ekf = ekf.x[0], ekf.x[1]
+            estimated_positions.append([time_bucket, x_real, y_real, x_ekf, y_ekf])
+            
+        print(f"Processed sample in group ({x_real}, {y_real})")
+    
+    return pd.DataFrame(estimated_positions, columns=["Time_Bucket", "X_Real", "Y_Real", "X_EKF", "Y_EKF"])
+
+def local_unscented_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: list, dt: float = None) -> pd.DataFrame:
     """
     Local Particle Filter applied for each group based on ("X_Real", "Y_Real").
     
     Parameters:
-        merged_df (pd.DataFrame): Result from prepare_merged_dataframe(), with the index as Time_Bucket.
+        df (pd.DataFrame): Result from prepare_merged_dataframe(), with the index as Time_Bucket.
                                   Each anchor's columns are in the format:
                                   ["X_Real", "Y_Real", f"{anchor1_id}_Azimuth}", f"{anchor2_id}_Azimuth}"].
         config (dict): Configuration containing anchor positions and orientations.
@@ -158,7 +281,7 @@ def local_unscented_kalman_filter(merged_df: pd.DataFrame, config: dict, anchor_
     THRESHOLD = 100
 
     # Run the UKF for each group based on ("X_Real", "Y_Real").
-    for (x_real, y_real), group_df in merged_df.groupby(["X_Real", "Y_Real"]):
+    for (x_real, y_real), group_df in df.groupby(["X_Real", "Y_Real"]):
         initial_state = np.array([
             np.random.uniform(min_x, max_x),
             np.random.uniform(min_y, max_y),
@@ -193,12 +316,12 @@ def local_unscented_kalman_filter(merged_df: pd.DataFrame, config: dict, anchor_
     
     return pd.DataFrame(estimated_positions, columns=["Time_Bucket", "X_Real", "Y_Real", "X_UKF", "Y_UKF"])
 
-def local_particle_filter(merged_df: pd.DataFrame, config: dict, anchor_ids: list, dt: float = None) -> pd.DataFrame:
+def local_particle_filter(df: pd.DataFrame, config: dict, anchor_ids: list, dt: float = None) -> pd.DataFrame:
     """
     Local Particle Filter applied for each group based on ("X_Real", "Y_Real").
     
     Parameters:
-        merged_df (pd.DataFrame): Result from prepare_merged_dataframe(), with the index as Time_Bucket.
+        df (pd.DataFrame): Result from prepare_merged_dataframe(), with the index as Time_Bucket.
                                   Each anchor's columns are in the format:
                                   ["X_Real", "Y_Real", f"{anchor1_id}_Azimuth}", f"{anchor2_id}_Azimuth}"].
         config (dict): Configuration containing anchor positions and orientations.
@@ -222,7 +345,7 @@ def local_particle_filter(merged_df: pd.DataFrame, config: dict, anchor_ids: lis
     THRESHOLD = 100
     
     # Test each group based on ("X_Real", "Y_Real").
-    for (x_real, y_real), group_df in merged_df.groupby(["X_Real", "Y_Real"]):
+    for (x_real, y_real), group_df in df.groupby(["X_Real", "Y_Real"]):
         pf.initialize_particles()
         
         th = 0  # Threshold for skipping the initial samples

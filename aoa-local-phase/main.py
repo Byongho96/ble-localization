@@ -9,21 +9,22 @@ def aoa_local_kf(df: pd.DataFrame, anchor_ids: list[int], config: dict, delta: i
     all_results = {
         'raw': [],
         '2d_kf': [],
-        '3d_kf': [],
         'ekf': [],
         'ukf': [],
         'pf': [],
     }
 
-    # all_results['raw'] = lf.least_squares_triangulation(df, config, anchor_ids)
-    # all_results['2d_kf'] = lf.local_2D_kalman_filter(all_results['raw'], delta)
-    # all_results['ukf'] = lf.local_unscented_kalman_filter(df, config, anchor_ids, delta)
+    all_results['raw'] = lf.least_squares_triangulation(df, config, anchor_ids)
+    all_results['2d_kf'] = lf.local_2D_kalman_filter(all_results['raw'], delta)
+    all_results['ekf'] = lf.local_extended_kalman_filter(df, config, anchor_ids, delta)
+    all_results['ukf'] = lf.local_unscented_kalman_filter(df, config, anchor_ids, delta)
     all_results['pf'] = lf.local_particle_filter(df, config, anchor_ids, delta)
 
     # Show the results
-    # vs.visualize_distance_error_with_heatmap(all_results['raw'], 'X_Real', 'Y_Real', 'X_LS', 'Y_LS', vmin=0, vmax=200, title="Raw Local")
-    # vs.visualize_distance_error_with_heatmap(all_results['2d_kf'], 'X_Real', 'Y_Real', 'X_2D_KF', 'Y_2D_KF', vmin=0, vmax=300, title="2D Kalman Local")
-    # vs.visualize_distance_error_with_heatmap(all_results['ukf'], 'X_Real', 'Y_Real', 'X_UKF', 'Y_UKF', vmin=0, vmax=300, title="Unscented Local")
+    vs.visualize_distance_error_with_heatmap(all_results['raw'], 'X_Real', 'Y_Real', 'X_LS', 'Y_LS', vmin=0, vmax=200, title="Raw Local")
+    vs.visualize_distance_error_with_heatmap(all_results['2d_kf'], 'X_Real', 'Y_Real', 'X_2D_KF', 'Y_2D_KF', vmin=0, vmax=300, title="2D Kalman Local")
+    vs.visualize_distance_error_with_heatmap(all_results['ekf'], 'X_Real', 'Y_Real', 'X_EKF', 'Y_EKF', vmin=0, vmax=300, title="Extended Local")
+    vs.visualize_distance_error_with_heatmap(all_results['ukf'], 'X_Real', 'Y_Real', 'X_UKF', 'Y_UKF', vmin=0, vmax=300, title="Unscented Local")
     vs.visualize_distance_error_with_heatmap(all_results['pf'], 'X_Real', 'Y_Real', 'X_PF', 'Y_PF', vmin=0, vmax=300, title="Particle Local")
 
 
