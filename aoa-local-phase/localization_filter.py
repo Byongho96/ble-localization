@@ -89,42 +89,6 @@ def local_extended_kalman_filter(df: pd.DataFrame, dt: float = 0.02) -> pd.DataF
     pass
 
 
-def create_h_function_v(anchors_position: np.ndarray, anchors_orientation: np.ndarray):
-    """
-    각 앵커의 위치와 방향을 바탕으로 측정 함수(hx)를 생성합니다.
-    상태 벡터 x의 처음 두 요소 ([x, y])를 사용하여 각도를 계산합니다.
-    """
-    anchors_orientation_rad = np.deg2rad(anchors_orientation)
-    
-    def hx(x: np.ndarray) -> np.ndarray:
-        pos = x[:2]  # [x, y]만 사용
-        predicted_angles = []
-        for (ax, ay), a_ori_rad in zip(anchors_position, anchors_orientation_rad):
-            # 앵커에서 태그까지의 각도 계산 (비교: arctan2(pos[0]-ax, pos[1]-ay))
-            angle = np.arctan2(pos[0] - ax, pos[1] - ay) - a_ori_rad
-            # [-pi, pi]로 정규화 후 degree 단위로 변환
-            angle = (angle + np.pi) % (2 * np.pi) - np.pi
-            predicted_angles.append(np.degrees(angle))
-        return np.array(predicted_angles)
-    
-    return hx
-
-def fx(x: np.ndarray, dt: float) -> np.ndarray:
-    """
-    4차원 상태 전이 함수 (상수 속도 모델).
-    
-    x = [x, y, vx, vy]라 할 때,
-      x_new = x + vx * dt
-      y_new = y + vy * dt
-      vx_new = vx
-      vy_new = vy
-    """
-    F = np.array([[1, 0, 0, 0],
-                  [0, 1, 0, 0],
-                  [0, 0, 1,  0],
-                  [0, 0, 0,  1]])
-    return F @ x
-
 def local_unscented_kalman_filter(merged_df: pd.DataFrame, config: dict, anchor_ids: list, dt: float = None) -> pd.DataFrame:
     """
     Local Particle Filter applied for each group based on ("X_Real", "Y_Real").
@@ -141,51 +105,89 @@ def local_unscented_kalman_filter(merged_df: pd.DataFrame, config: dict, anchor_
     """
     print("Start the Unscented Kalman Filter Process")
     
+    dt /= 1000 # ms -> sec
+
+    num_anchors = len(anchor_ids)
     anchors_position = np.array([config["anchors"][aid]["position"] for aid in anchor_ids])
     anchors_orientation = np.array([config["anchors"][aid]["orientation"] for aid in anchor_ids])
-    num_anchors = len(anchor_ids)
     
-    # 상태 공간 4차원에 맞춰 hx 함수 생성
-    hx = create_h_function_v(anchors_position, anchors_orientation)
-    points = MerweScaledSigmaPoints(n=4, alpha=0.1, beta=2, kappa=0)
-    ukf = UnscentedKalmanFilter(dim_x=4, dim_z=num_anchors, dt=dt, fx=fx, hx=hx, points=points)
+    # fx : State Transition Function
+    def fx(x: np.ndarray, dt: float) -> np.ndarray:
+        """
+        State transition function for the Unscented Kalman Filter.
+
+        [x, y, x_dot, y_dot] -> [x, y, x_dot, y_dot]
+        """
+        dt2 = 0.5 * dt**2
+        F = np.array([
+            [1, 0, dt, 0, dt2, 0],
+            [0, 1, 0, dt, 0, dt2],
+            [0, 0, 1, 0, dt, 0],
+            [0, 0, 0, 1, 0, dt],
+            [0, 0, 0, 0, 1, 0],
+            [0, 0, 0, 0, 0, 1]
+        ])
+        return F @ x
     
-    # 프로세스 노이즈 (위치, 속도에 대한 불확실성 반영)
-    ukf.Q = np.diag([1.0, 1.0, 1.0, 1.0])
-    angle_noise_std = 6.0
-    ukf.R = np.eye(num_anchors) * (angle_noise_std ** 2)
+    # hx : Measurement Function
+    anchors_orientation_rad = np.deg2rad(anchors_orientation)
+    
+    def hx(x: np.ndarray) -> np.ndarray:
+        pos = x[:2]  # Extract the position
+        predicted_angles = []
+        for (ax, ay), a_ori_rad in zip(anchors_position, anchors_orientation_rad):
+            angle = np.arctan2(pos[0] - ax, pos[1] - ay) - a_ori_rad
+            angle = (angle + np.pi) % (2 * np.pi) - np.pi
+            predicted_angles.append(np.degrees(angle))
+
+        return np.array(predicted_angles)
+
+    # Sigma Points
+    points = MerweScaledSigmaPoints(n=6, alpha=0.1, beta=2, kappa=0)
+    
+    # Unscented Kalman Filter
+    ukf = UnscentedKalmanFilter(dim_x=6, dim_z=num_anchors, dt=dt, fx=fx, hx=hx, points=points)
+    
+    # Measurement Noise
+    ukf.R = np.eye(num_anchors) * (6.0** 2) # angle noise std = 6.0
     
     state_bounds = (0, 1200, 0, 600)
     min_x, max_x, min_y, max_y = state_bounds
     
     estimated_positions = []
-    THRESHOLD = 200
+    THRESHOLD = 100
 
-    # 그룹별 처리 ("X_Real", "Y_Real" 기준)
+    # Run the UKF for each group based on ("X_Real", "Y_Real").
     for (x_real, y_real), group_df in merged_df.groupby(["X_Real", "Y_Real"]):
-        # 초기 상태: 위치는 범위 내 임의값, 속도는 0으로 초기화
         initial_state = np.array([
-            600,
-            300,
-            0.0,
-            0.0
+            np.random.uniform(min_x, max_x),
+            np.random.uniform(min_y, max_y),
+            0.0, 0.0,
+            0.0, 0.0
         ])
         ukf.x = initial_state.copy()
-        ukf.P = np.eye(4) * 500.0
+        ukf.P = np.eye(6) * 500.0
         
         th = 0
         for time_bucket, row in group_df.iterrows():
             measured_aoa = np.array([row[f"{aid}_Azimuth"] for aid in anchor_ids])
+
+            # Adaptive Process Noise
+            vel = np.linalg.norm(ukf.x[2:4])
+            if vel < 0.1:  # If the velocity is low
+                ukf.Q = np.diag([0.1, 0.1, 0.1, 0.1, 0.05, 0.05])
+            else:
+                ukf.Q = np.diag([1.0, 1.0, 1.0, 1.0, 0.5, 0.5])
+
             ukf.predict()
             ukf.update(measured_aoa)
             x_ukf, y_ukf = ukf.x[0], ukf.x[1]
+            
             th += 1
             if th < THRESHOLD:
                 continue
+            
             estimated_positions.append([time_bucket, x_real, y_real, x_ukf, y_ukf])
-
-            # if (x_real ==420) and (y_real == 180):
-            #     print(x_ukf, y_ukf)
             
         print(f"Processed sample in group ({x_real}, {y_real})")
     
@@ -207,12 +209,14 @@ def local_particle_filter(merged_df: pd.DataFrame, config: dict, anchor_ids: lis
     """
     print("Start the Particle Filter Process")
 
+    dt /= 1000 # ms -> sec
+
     # Prepare arrays for each anchor's position and orientation.
     anchors_position = np.array([config["anchors"][aid]["position"] for aid in anchor_ids])
     anchors_orientation = np.array([config["anchors"][aid]["orientation"] for aid in anchor_ids])
     
     # Assume that the ParticleFilter class is already implemented.
-    pf = ParticleFilter(num_particles=1000, state_bounds=(0, 1200, 0, 600), angle_noise_std=6.)
+    pf = ParticleFilter(num_particles=1000, state_bounds=(0, 1200, 0, 600), angle_noise_std=6., dt=dt)
     
     estimated_positions = []
     THRESHOLD = 100

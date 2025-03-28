@@ -2,7 +2,7 @@ import numpy as np
 
 class ParticleFilter:
     def __init__(self, num_particles: int, state_bounds: tuple[float, float, float, float],
-                 angle_noise_std: float, seed: int = None) -> None:
+                 angle_noise_std: float, dt: float, seed: int = None) -> None:
         """
         Args:
             num_particles: Number of particles.
@@ -13,19 +13,28 @@ class ParticleFilter:
             np.random.seed(seed)
         
         # Assign instance variables
-        self.num_particles = num_particles
+        self.num_particles = num_particles 
         self.state_bounds = state_bounds
         self.angle_noise_std = angle_noise_std
+        self.dt = dt
+
+        self.prev_estimated_state = None
+        self.last_estimated_state = None
         
         # Initialize particles and weights
-        self.particles = np.empty((num_particles, 2))
+        self.state_dim = 6 # [x, y, vx, vy, ax, ay
+        self.particles = np.empty((num_particles, self.state_dim))
         self.initialize_particles()
         self.weights = np.ones(num_particles) / num_particles
 
     def initialize_particles(self) -> None:
         min_x, max_x, min_y, max_y = self.state_bounds
-        self.particles[:, 0] = np.random.uniform(min_x, max_x, size=self.num_particles)
-        self.particles[:, 1] = np.random.uniform(min_y, max_y, size=self.num_particles)
+        self.particles[:, 0] = np.random.uniform(min_x, max_x, size=self.num_particles)  # x
+        self.particles[:, 1] = np.random.uniform(min_y, max_y, size=self.num_particles)  # y
+        self.particles[:, 2:] = 0.0
+        
+        self.prev_estimated_state = None
+        self.last_estimated_state = None
         
     def update(self,  measured_aoa: np.ndarray, anchors_position: np.ndarray,
                anchors_orientation: np.ndarray) -> None:
@@ -90,7 +99,7 @@ class ParticleFilter:
                     break
         return indexes
     
-    def predict(self, motion: np.ndarray = None, noise_std: float = 0.1) -> None:
+    def predict(self) -> None:
         """
         Predict the next state of the particles.
 
@@ -98,13 +107,40 @@ class ParticleFilter:
             motion: Motion vector (dx, dy) for all particles.
             noise_std: Standard deviation of the noise.
         """
-        if motion is None:
-            motion = np.array([0.0, 0.0])
-        noise = np.random.randn(self.num_particles, 2) * noise_std
-        self.particles += motion + noise
+        dt = self.dt
+        dt2 = 0.5 * dt**2
+
+        # State transition matrix
+        F = np.array([
+            [1, 0, dt, 0, dt2, 0],
+            [0, 1, 0, dt, 0, dt2],
+            [0, 0, 1, 0, dt, 0],
+            [0, 0, 0, 1, 0, dt],
+            [0, 0, 0, 0, 1, 0],
+            [0, 0, 0, 0, 0, 1],
+        ])
+
+        # Noise 
+        noise_std = 0.01
+        if (self.last_estimated_state is not None) and (self.prev_estimated_state is not None):
+            vel = self.last_estimated_state[:2] - self.prev_estimated_state[:2]
+            noise_std = np.linalg.norm(vel) * 0.01
+        noise = np.random.randn(self.num_particles, self.state_dim) * noise_std
+
+        self.particles = (self.particles @ F.T) + noise
 
     def estimate(self) -> np.ndarray:
         """
         Estimate the current position based on the particles.
         """
-        return np.mean(self.particles, axis=0)
+        estimated_state = np.mean(self.particles, axis=0)
+
+        # Update internal states
+        if self.last_estimated_state is None:
+            self.last_estimated_state = estimated_state
+            self.prev_estimated_state = estimated_state
+        else:
+            self.prev_estimated_state = self.last_estimated_state
+            self.last_estimated_state = estimated_state
+
+        return estimated_state[:2] 
