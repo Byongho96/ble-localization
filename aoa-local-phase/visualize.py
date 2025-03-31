@@ -21,8 +21,9 @@ def visualize_distance_error_with_heatmap(df: pd.DataFrame, x_gt_column: str, y_
     print(f"Visualizing {title}")
     
     error_df = df.copy()
-    error_df["X_Error"] = abs(df[x_ms_column] - df[x_gt_column])
-    error_df["Y_Error"] = abs(df[y_ms_column] - df[y_gt_column])
+    # error_df = error_df[(error_df['X_Real'] >= 300) & (error_df['X_Real'] <= 900) & (error_df['Y_Real'] >= 180) & (error_df['Y_Real'] <= 420)]
+    error_df["X_Error"] = abs(error_df[x_ms_column] - error_df[x_gt_column])
+    error_df["Y_Error"] = abs(error_df[y_ms_column] - error_df[y_gt_column])
     error_df["Distance_Error"] = (error_df["X_Error"]**2 + error_df["Y_Error"]**2)**0.5
     
     # Print the mean error and std
@@ -30,13 +31,15 @@ def visualize_distance_error_with_heatmap(df: pd.DataFrame, x_gt_column: str, y_
     std_error = error_df["Distance_Error"].std()
     print(f"Mean Error: {mean_error:.2f}, Std Error: {std_error:.2f}")
 
-    plt.figure(figsize=(10, 6))
-    sc = plt.scatter(df[x_gt_column], df[y_gt_column], c=error_df["Distance_Error"], cmap='coolwarm', s=100, vmin=vmin, vmax=vmax)
+    plt.figure(figsize=(12, 6))
+    sc = plt.scatter(error_df[x_gt_column], error_df[y_gt_column], c=error_df["Distance_Error"], cmap='coolwarm', s=100, vmin=vmin, vmax=vmax)
     cbar = plt.colorbar(sc)
     cbar.set_label("Distance Error")
     
     plt.xlabel("X")
+    plt.xlim(0, 1200)
     plt.ylabel("Y")
+    plt.ylim(0, 600)
     plt.title(title)
 
     plt.grid(True)

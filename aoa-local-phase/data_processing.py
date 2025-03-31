@@ -1,6 +1,30 @@
 import numpy as np
 import pandas as pd
 
+def interpolate_ground_truth(gt_df: pd.DataFrame, dt: int) -> pd.DataFrame:
+
+    # Create a new time index with delta spacing
+    start = gt_df['StartTimestamp'].iloc[0]
+    end = gt_df['StartTimestamp'].iloc[-1]
+
+    start_timestamps = np.arange(start, end + dt, dt)
+    end_timestamps = np.arange(start + dt, end + 2 * dt, dt)
+
+    # Interpolate X and Y values linearly
+    interp_x = np.interp(start_timestamps, gt_df['StartTimestamp'], gt_df['X'])
+    interp_y = np.interp(end_timestamps, gt_df['StartTimestamp'], gt_df['Y'])
+
+    # Create a new DataFrame with interpolated values
+    result = pd.DataFrame({
+        'StartTimestamp': start_timestamps,
+        'EndTimestamp': end_timestamps,
+        'X': interp_x,
+        'Y': interp_y
+    })
+
+    return result
+
+
 def filter_with_position_ground_truth(gt_df: pd.DataFrame, ms_df: pd.DataFrame) -> pd.DataFrame:
     '''
     Filter the measurement data by the ground truth data.
@@ -25,16 +49,17 @@ def filter_with_position_ground_truth(gt_df: pd.DataFrame, ms_df: pd.DataFrame) 
         
     return pd.concat(filtered_data, ignore_index=True) if filtered_data else pd.DataFrame()
 
-def discretize_grid_points_by_delta(df: pd.DataFrame, dt: int = 0) -> pd.DataFrame:
+
+def discretize_by_delta(df: pd.DataFrame, dt: int = 0) -> pd.DataFrame:
     """
-    Discretize the data at each (X_Real, Y_Real) grid point by time intervals (dt).
+    Discretize the data by time intervals (dt).
 
     Parameters:
         df (pd.DataFrame): Input DataFrame with ['Timestamp', 'X_Real', 'Y_Real'] columns
         dt (int): Time step in the same unit as 'Timestamp'
 
     Returns:
-        pd.DataFrame: Discretized DataFrame averaged by time bucket and grid location. ['Time_Bucket'] column is added.
+        pd.DataFrame: Discretized DataFrame averaged by time bucket. ['Time_Bucket'] column is added.
     """
     if not dt:
         return df
@@ -44,8 +69,8 @@ def discretize_grid_points_by_delta(df: pd.DataFrame, dt: int = 0) -> pd.DataFra
     # Create time buckets by discretizing the Timestamp column in dt intervals
     df["Time_Bucket"] = (df["Timestamp"] // dt) * dt
 
-    # Compute mean for each unique (X_Real, Y_Real, Time_Bucket) group
-    discretized_df = df.groupby(["X_Real", "Y_Real", "Time_Bucket"], as_index=False).mean(numeric_only=True)
+    # Compute mean for each unique (Time_Bucket) group
+    discretized_df = df.groupby(["Time_Bucket"], as_index=False).mean(numeric_only=True)
     discretized_df["Timestamp"] = discretized_df["Time_Bucket"] + dt
 
     return discretized_df
@@ -63,6 +88,7 @@ def prepare_merged_dataframe(dic: dict) -> pd.DataFrame:
     """
     dfs = []
     for i, (anchor_id, df) in enumerate(dic.items()):
+
         df_temp = df.copy().set_index("Time_Bucket")
         if i == 0:
             # For the base anchor, keep "X_Real" and "Y_Real" columns unchanged,

@@ -3,6 +3,7 @@ import yaml
 import pandas as pd
 import data_processing as dp
 import localization_filter as lf
+import localization_mobile_filter as lmf
 import visualize as vs
 
 def aoa_local_kf(df: pd.DataFrame, anchor_ids: list[int], config: dict, delta: int):
@@ -16,19 +17,42 @@ def aoa_local_kf(df: pd.DataFrame, anchor_ids: list[int], config: dict, delta: i
 
     all_results['raw'] = lf.least_squares_triangulation(df, config, anchor_ids)
     all_results['2d_kf'] = lf.local_2D_kalman_filter(all_results['raw'], delta)
-    all_results['ekf'] = lf.local_extended_kalman_filter(df, config, anchor_ids, delta)
+    # all_results['ekf'] = lf.local_extended_kalman_filter(df, config, anchor_ids, delta)
     all_results['ukf'] = lf.local_unscented_kalman_filter(df, config, anchor_ids, delta)
-    all_results['pf'] = lf.local_particle_filter(df, config, anchor_ids, delta)
+    # all_results['pf'] = lf.local_particle_filter(df, config, anchor_ids, delta)
 
     # Show the results
     vs.visualize_distance_error_with_heatmap(all_results['raw'], 'X_Real', 'Y_Real', 'X_LS', 'Y_LS', vmin=0, vmax=200, title="Raw Local")
-    vs.visualize_distance_error_with_heatmap(all_results['2d_kf'], 'X_Real', 'Y_Real', 'X_2D_KF', 'Y_2D_KF', vmin=0, vmax=300, title="2D Kalman Local")
-    vs.visualize_distance_error_with_heatmap(all_results['ekf'], 'X_Real', 'Y_Real', 'X_EKF', 'Y_EKF', vmin=0, vmax=300, title="Extended Local")
-    vs.visualize_distance_error_with_heatmap(all_results['ukf'], 'X_Real', 'Y_Real', 'X_UKF', 'Y_UKF', vmin=0, vmax=300, title="Unscented Local")
-    vs.visualize_distance_error_with_heatmap(all_results['pf'], 'X_Real', 'Y_Real', 'X_PF', 'Y_PF', vmin=0, vmax=300, title="Particle Local")
+    vs.visualize_distance_error_with_heatmap(all_results['2d_kf'], 'X_Real', 'Y_Real', 'X_2D_KF', 'Y_2D_KF', vmin=0, vmax=200, title="2D Kalman Local")
+    # vs.visualize_distance_error_with_heatmap(all_results['ekf'], 'X_Real', 'Y_Real', 'X_EKF', 'Y_EKF', vmin=0, vmax=200, title="Extended Local")
+    vs.visualize_distance_error_with_heatmap(all_results['ukf'], 'X_Real', 'Y_Real', 'X_UKF', 'Y_UKF', vmin=0, vmax=200, title="Unscented Local")
+    # vs.visualize_distance_error_with_heatmap(all_results['pf'], 'X_Real', 'Y_Real', 'X_PF', 'Y_PF', vmin=0, vmax=200, title="Particle Local")
 
+def aoa_local_mobile_kf(df: pd.DataFrame, anchor_ids: list[int], config: dict, delta: int):
+    all_results = {
+        'raw': [],
+        '2d_kf': [],
+        'ekf': [],
+        'ukf': [],
+        'pf': [],
+    }
 
-def main():
+    all_results['raw'] = lmf.least_squares_triangulation(df, config, anchor_ids)
+    all_results['2d_kf'] = lmf.local_2D_kalman_filter(all_results['raw'], delta)
+    all_results['ekf'] = lmf.local_extended_kalman_filter(df, config, anchor_ids, delta)
+    all_results['ukf'] = lmf.local_unscented_kalman_filter(df, config, anchor_ids, delta)
+    all_results['pf'] = lmf.local_particle_filter(df, config, anchor_ids, delta)
+
+    print(all_results['raw'])
+    print(all_results['ekf'])
+    # Show the results
+    vs.visualize_distance_error_with_heatmap(all_results['raw'], 'X_Real', 'Y_Real', 'X_LS', 'Y_LS', vmin=0, vmax=200, title="Raw Local")
+    vs.visualize_distance_error_with_heatmap(all_results['2d_kf'], 'X_Real', 'Y_Real', 'X_2D_KF', 'Y_2D_KF', vmin=0, vmax=200, title="2D Kalman Local")
+    vs.visualize_distance_error_with_heatmap(all_results['ekf'], 'X_Real', 'Y_Real', 'X_EKF', 'Y_EKF', vmin=0, vmax=200, title="Extended Local")
+    vs.visualize_distance_error_with_heatmap(all_results['ukf'], 'X_Real', 'Y_Real', 'X_UKF', 'Y_UKF', vmin=0, vmax=200, title="Unscented Local")
+    vs.visualize_distance_error_with_heatmap(all_results['pf'], 'X_Real', 'Y_Real', 'X_PF', 'Y_PF', vmin=0, vmax=200, title="Particle Local")
+
+def calibration():
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
     # Load files
@@ -43,19 +67,54 @@ def main():
 
     # Group by anchors
     anchors_df_dict = { anchor_id: anchor_df for anchor_id, anchor_df in ms_df.groupby("AnchorID") }
+    anchor_ids = list(anchors_df_dict.keys())
 
     # Preprocess the data
     for anchor_id, anchor_df in anchors_df_dict.items():
     
         anchor_gt_df = dp.filter_with_position_ground_truth(gt_df, anchor_df)
-        anchor_discretized_df = dp.discretize_grid_points_by_delta(anchor_gt_df, delta)
-
+        anchor_discretized_df = dp.discretize_by_delta(anchor_gt_df, delta)
         anchors_df_dict[anchor_id] = anchor_discretized_df
 
-    anchor_ids = list(config['anchors'].keys())
     anchors_df = dp.prepare_merged_dataframe(anchors_df_dict)  
 
     aoa_local_kf(anchors_df, anchor_ids, config, delta)
 
+def mobility():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # Load Config
+    config = yaml.safe_load(open(os.path.join(base_dir, "../config.yml")))
+    delta = config['delta']
+
+    # Load files
+    gt_path = os.path.join(base_dir, "../dataset/mobility/gt/use-case1/gt_mobility_use-case1_run1.csv")
+    gt_df = pd.read_csv(gt_path)
+
+    ms_path = os.path.join(base_dir, "../dataset/mobility/beacons/use-case1/beacons_mobility_use-case1_run1.csv")
+    ms_df = pd.read_csv(ms_path)
+
+    # Interpolate the ground truth data
+    gt_interpolated_df = dp.interpolate_ground_truth(gt_df, delta)
+    print(gt_interpolated_df)
+
+    # Group by anchors
+    anchors_df_dict = { anchor_id: anchor_df for anchor_id, anchor_df in ms_df.groupby("AnchorID") }
+    anchor_ids = list(anchors_df_dict.keys())
+
+    # Preprocess the data
+    for anchor_id, anchor_df in anchors_df_dict.items():
+    
+        anchor_gt_df = dp.filter_with_position_ground_truth(gt_interpolated_df, anchor_df)
+        anchor_discretized_df = dp.discretize_by_delta(anchor_gt_df, delta)
+        anchors_df_dict[anchor_id] = anchor_discretized_df
+
+    # Merge the dataframes
+    anchors_df = dp.prepare_merged_dataframe(anchors_df_dict)  
+    
+    aoa_local_mobile_kf(anchors_df, anchor_ids, config, delta)
+
+
 if __name__ == '__main__':
-    main()
+    # calibration()
+    mobility()
