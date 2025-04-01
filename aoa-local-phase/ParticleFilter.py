@@ -21,8 +21,8 @@ class ParticleFilter:
         self.prev_estimated_state = None
         self.last_estimated_state = None
         
-        # Initialize particles and weights
-        self.state_dim = 6 # [x, y, vx, vy, ax, ay
+        # Use state vector: [x, y, vx, vy]
+        self.state_dim = 4
         self.particles = np.empty((num_particles, self.state_dim))
         self.initialize_particles()
         self.weights = np.ones(num_particles) / num_particles
@@ -31,12 +31,13 @@ class ParticleFilter:
         min_x, max_x, min_y, max_y = self.state_bounds
         self.particles[:, 0] = np.random.uniform(min_x, max_x, size=self.num_particles)  # x
         self.particles[:, 1] = np.random.uniform(min_y, max_y, size=self.num_particles)  # y
+        # 초기 속도는 0으로 설정
         self.particles[:, 2:] = 0.0
         
         self.prev_estimated_state = None
         self.last_estimated_state = None
         
-    def update(self,  measured_aoa: np.ndarray, anchors_position: np.ndarray,
+    def update(self, measured_aoa: np.ndarray, anchors_position: np.ndarray,
                anchors_orientation: np.ndarray) -> None:
         """
         Update the particle filter based on the measured AoA.
@@ -59,7 +60,8 @@ class ParticleFilter:
 
         # Compute the angle between the particle and the anchor
         particle_angles = np.arctan2(dx, dy) - anchors_orientations_rad[np.newaxis, :]
-        particle_angles = np.degrees((particle_angles + np.pi) % (2 * np.pi) - np.pi)
+        particle_angles = (particle_angles + np.pi) % (2 * np.pi) - np.pi
+        particle_angles = np.rad2deg(particle_angles)
 
         # Compute the difference between the measured AoA and the particle's angle
         errors = np.abs(measured_aoa - particle_angles)
@@ -67,7 +69,6 @@ class ParticleFilter:
         weights = np.prod(np.exp(-0.5 * (errors / self.angle_noise_std) ** 2), axis=1)
 
         return weights
-
 
     def resample(self) -> None:
         """
@@ -93,41 +94,25 @@ class ParticleFilter:
                 i += 1
             else:
                 j += 1
-                # Safety check: if j exceeds N, set the remaining indexes to the last particle
                 if j >= N:
                     indexes[i:] = N - 1
                     break
         return indexes
     
-    def predict(self) -> None:
+    def predict(self, pos_noise_std: float, vel_noise_std: float) -> None:
         """
-        Predict the next state of the particles.
-
-        Args:
-            motion: Motion vector (dx, dy) for all particles.
-            noise_std: Standard deviation of the noise.
+        Predict the next state of the particles using a constant velocity model.
         """
         dt = self.dt
-        dt2 = 0.5 * dt**2
 
-        # State transition matrix
-        F = np.array([
-            [1, 0, dt, 0, dt2, 0],
-            [0, 1, 0, dt, 0, dt2],
-            [0, 0, 1, 0, dt, 0],
-            [0, 0, 0, 1, 0, dt],
-            [0, 0, 0, 0, 1, 0],
-            [0, 0, 0, 0, 0, 1],
-        ])
+        # Update position : constant velocity + noise
+        self.particles[:, 0] = self.particles[:, 0] + self.particles[:, 2] * dt + np.random.randn(self.num_particles) * pos_noise_std
+        self.particles[:, 1] = self.particles[:, 1] + self.particles[:, 3] * dt + np.random.randn(self.num_particles) * pos_noise_std
+        
+        # Update velocity : constant velocity + noise
+        self.particles[:, 2] = self.particles[:, 2] + np.random.randn(self.num_particles) * vel_noise_std
+        self.particles[:, 3] = self.particles[:, 3] + np.random.randn(self.num_particles) * vel_noise_std
 
-        # Noise 
-        noise_std = 0.01
-        if (self.last_estimated_state is not None) and (self.prev_estimated_state is not None):
-            vel = self.last_estimated_state[:2] - self.prev_estimated_state[:2]
-            noise_std = np.linalg.norm(vel) * 0.01
-        noise = np.random.randn(self.num_particles, self.state_dim) * noise_std
-
-        self.particles = (self.particles @ F.T) + noise
 
     def estimate(self) -> np.ndarray:
         """
@@ -143,4 +128,4 @@ class ParticleFilter:
             self.prev_estimated_state = self.last_estimated_state
             self.last_estimated_state = estimated_state
 
-        return estimated_state[:2] 
+        return estimated_state[:2]

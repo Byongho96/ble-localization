@@ -28,7 +28,7 @@ def aoa_local_kf(df: pd.DataFrame, anchor_ids: list[int], config: dict, delta: i
     vs.visualize_distance_error_with_heatmap(all_results['ukf'], 'X_Real', 'Y_Real', 'X_UKF', 'Y_UKF', vmin=0, vmax=200, title="Unscented Local")
     # vs.visualize_distance_error_with_heatmap(all_results['pf'], 'X_Real', 'Y_Real', 'X_PF', 'Y_PF', vmin=0, vmax=200, title="Particle Local")
 
-def aoa_local_mobile_kf(df: pd.DataFrame, anchor_ids: list[int], config: dict, delta: int):
+def aoa_local_mobile_kf(df: pd.DataFrame, anchor_ids: list[int], config: dict, delta: int, threshold: int):
     all_results = {
         'raw': [],
         '2d_kf': [],
@@ -39,12 +39,10 @@ def aoa_local_mobile_kf(df: pd.DataFrame, anchor_ids: list[int], config: dict, d
 
     all_results['raw'] = lmf.least_squares_triangulation(df, config, anchor_ids)
     all_results['2d_kf'] = lmf.local_2D_kalman_filter(all_results['raw'], delta)
-    all_results['ekf'] = lmf.local_extended_kalman_filter(df, config, anchor_ids, delta)
-    all_results['ukf'] = lmf.local_unscented_kalman_filter(df, config, anchor_ids, delta)
-    all_results['pf'] = lmf.local_particle_filter(df, config, anchor_ids, delta)
+    all_results['ekf'] = lmf.local_extended_kalman_filter(df, config, anchor_ids, delta, threshold)
+    all_results['ukf'] = lmf.local_unscented_kalman_filter(df, config, anchor_ids, delta, threshold)
+    all_results['pf'] = lmf.local_particle_filter(df, config, anchor_ids, delta, threshold)
 
-    print(all_results['raw'])
-    print(all_results['ekf'])
     # Show the results
     vs.visualize_distance_error_with_heatmap(all_results['raw'], 'X_Real', 'Y_Real', 'X_LS', 'Y_LS', vmin=0, vmax=200, title="Raw Local")
     vs.visualize_distance_error_with_heatmap(all_results['2d_kf'], 'X_Real', 'Y_Real', 'X_2D_KF', 'Y_2D_KF', vmin=0, vmax=200, title="2D Kalman Local")
@@ -86,6 +84,7 @@ def mobility():
     # Load Config
     config = yaml.safe_load(open(os.path.join(base_dir, "../config.yml")))
     delta = config['delta']
+    threshold = config['threshold']
 
     # Load files
     gt_path = os.path.join(base_dir, "../dataset/mobility/gt/use-case1/gt_mobility_use-case1_run1.csv")
@@ -96,7 +95,6 @@ def mobility():
 
     # Interpolate the ground truth data
     gt_interpolated_df = dp.interpolate_ground_truth(gt_df, delta)
-    print(gt_interpolated_df)
 
     # Group by anchors
     anchors_df_dict = { anchor_id: anchor_df for anchor_id, anchor_df in ms_df.groupby("AnchorID") }
@@ -112,7 +110,7 @@ def mobility():
     # Merge the dataframes
     anchors_df = dp.prepare_merged_dataframe(anchors_df_dict)  
     
-    aoa_local_mobile_kf(anchors_df, anchor_ids, config, delta)
+    aoa_local_mobile_kf(anchors_df, anchor_ids, config, delta, threshold)
 
 
 if __name__ == '__main__':
