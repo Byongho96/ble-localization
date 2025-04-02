@@ -2,7 +2,9 @@ import numpy as np
 import pandas as pd
 
 def interpolate_ground_truth(gt_df: pd.DataFrame, dt: int) -> pd.DataFrame:
-
+    """
+    Interpolate the ground truth data to create a new DataFrame with evenly spaced timestamps.
+    """
     # Create a new time index with delta spacing
     start = gt_df['StartTimestamp'].iloc[0]
     end = gt_df['StartTimestamp'].iloc[-1]

@@ -60,32 +60,31 @@ def local_2D_kalman_filter(df: pd.DataFrame, dt: int = 20) -> pd.DataFrame:
 
     kf = KalmanFilter(dim_x=4, dim_z=2)
 
-    """
-    Mean Error : 107 -> 75
-    Mean Std : 87 -> 62
-    """
-    
-    # Initial state: [x, vx, y, vy]
-    kf.x = np.array([df.iloc[0]["X_LS"], 0.0,
-                     df.iloc[0]["Y_LS"], 0.0])
+    # Initial state: [x, y, vx, vy]
+    kf.x = np.array([df.iloc[0]["X_LS"], df.iloc[0]["Y_LS"],
+                     0.0, 0.0])
 
     # State Transition Matrix
     kf.F = np.array([
-        [1, dt,  0,  0],
-        [0,  1,  0,  0],
-        [0,  0,  1, dt],
+        [1, 0,  dt,  0],
+        [0,  1,  0, dt],
+        [0,  0,  1,  0],
         [0,  0,  0,  1]])
     
     # Measurement Matrix
     kf.H = np.array([
         [1, 0, 0, 0],
-        [0, 0, 1, 0]])
-
-    # Initial Covariance Matrix : 
-    kf.P = np.diag([75, 1, 75, 1])
+        [0, 1, 0, 0]])
+    
+    """
+    Mean Error : 107 -> 75
+    Mean Std : 87 -> 62
+    """
+    # Initial Covariance Matrix
+    kf.P = np.diag([75, 75, 1, 1])
     
     # Process Noise Covariance
-    kf.Q = np.diag([19, 7, 19, 7])
+    kf.Q = np.diag([19, 19, 7, 7])
 
     # Measurement Noise Covariance
     kf.R = np.diag([62**2, 62**2])  
@@ -94,27 +93,32 @@ def local_2D_kalman_filter(df: pd.DataFrame, dt: int = 20) -> pd.DataFrame:
 
     # Run the Kalman Filter    
     for _, row in df.iterrows():
+        # Prediction step
         kf.predict()
 
-        kf.update(np.array([float(row["X_LS"]), float(row["Y_LS"])]))
-        
-        filtered_positions.append([float(kf.x[0]), float(kf.x[2])])
+        # Update step
+        z = np.array([float(row["X_LS"]), float(row["Y_LS"])])
+        kf.update(z)
+
+        # Save the filtered position
+        filtered_positions.append([float(kf.x[0]), float(kf.x[1])])
 
     df["X_2D_KF"], df["Y_2D_KF"] = zip(*filtered_positions)
     return df
 
 def local_extended_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: list, dt: int = 20, threshold: int = 0) -> pd.DataFrame:
     """
-    Constant Velocity 모델 ([x, y, vx, vy]) 기반의 Extended Kalman Filter.
+    Extended kalman filter with constant velocity model (state: [x, y, vx, vy]).`
     
     Parameters:
-        df (pd.DataFrame): "X_Real", "Y_Real" 및 각 앵커의 "Azimuth" 정보를 포함한 DataFrame.
-        config (dict): 앵커의 위치 및 설치 각도를 포함한 설정.
-        anchor_ids (list): 앵커 ID 리스트.
-        dt (int): 시간 간격 (ms 단위; 내부에서 초(sec) 단위로 변환).
+        df (pd.DataFrame): DataFrame with ["X_Real", "Y_Real"] and each anchor's "Azimuth" information.
+        config (dict): Configuration containing anchor positions and orientations.
+        anchor_ids (list): List of anchor IDs.
+        dt (int): Time interval (in milliseconds; converted to seconds internally).
+        threshold (int): Threshold for the number of iterations before starting to save results.
     
     Returns:
-        pd.DataFrame: ["Time_Bucket", "X_Real", "Y_Real", "X_EKF", "Y_EKF"] 컬럼을 가진 DataFrame.
+        pd.DataFrame: Dataframe with ["Time_Bucket", "X_Real", "Y_Real", "X_EKF", "Y_EKF"] columns.
     """
     print("Start the Extended Kalman Filter Process")
     
@@ -126,10 +130,10 @@ def local_extended_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: lis
     # State Transition Function (constant velocity model)
     def fx(x, dt):
         F = np.array([
-            [1, 0, dt, 0],
-            [0, 1, 0, dt],
-            [0, 0, 1,  0],
-            [0, 0, 0,  1]
+            [1,  0,  dt, 0],
+            [0,  1,  0, dt],
+            [0,  0,  1,  0],
+            [0,  0,  0,  1]
         ])
         return F @ x
     fx_lambda = lambda x: fx(x, dt) # Capture dt in lambda function
@@ -137,10 +141,10 @@ def local_extended_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: lis
     # Jacobian of the state transition function. Same as F in this case
     def FJacobian(x, dt):
         F = np.array([
-            [1, 0, dt, 0],
-            [0, 1, 0, dt],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1]
+            [1,  0, dt,  0],
+            [0,  1,  0, dt],
+            [0,  0,  1,  0],
+            [0,  0,  0,  1]
         ])
         return F
     FJacobian_lambda = lambda x: FJacobian(x, dt) # Capture dt in lambda function
@@ -197,7 +201,7 @@ def local_extended_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: lis
     
     estimated_positions = []
     th = 0
-
+    
     # Run the EKF
     for time_bucket, row in df.iterrows():
         measured_aoa = np.array([row[f"{aid}_Azimuth"] for aid in anchor_ids])
@@ -213,15 +217,15 @@ def local_extended_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: lis
     return pd.DataFrame(estimated_positions, columns=["Time_Bucket", "X_Real", "Y_Real", "X_EKF", "Y_EKF"])
 
 
-def local_unscented_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: list, dt: float = 20, threshold: int = 0) -> pd.DataFrame:
+def local_unscented_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: list, dt: int = 20, threshold: int = 0) -> pd.DataFrame:
     """
-    Local Unscented Kalman Filter 적용 예시 (상태: [x, y, vx, vy]).
+    Local Unscented Kalman Filter
 
     Parameters:
-        df (pd.DataFrame): "X_Real", "Y_Real" 및 각 앵커의 "Azimuth" 정보를 포함한 데이터프레임.
-        config (dict): 앵커 위치와 각도를 포함한 설정.
-        anchor_ids (list): 앵커 ID 리스트.
-        dt (int): 시간 간격 (ms 단위; 내부에서 sec 단위로 변환).
+        df (pd.DataFrame): DataFrame with ["X_Real", "Y_Real"] and each anchor's "Azimuth" information.
+        config (dict): Configuration containing anchor positions and orientations.
+        anchor_ids (list): List of anchor IDs.
+        dt (int): Time interval (in milliseconds; converted to seconds internally).
 
     Returns:
         pd.DataFrame: ["Time_Bucket", "X_Real", "Y_Real", "X_UKF", "Y_UKF"] 컬럼 포함 DataFrame.
@@ -306,6 +310,8 @@ def local_particle_filter(df: pd.DataFrame, config: dict, anchor_ids: list, dt: 
                                   ["X_Real", "Y_Real", f"{anchor1_id}_Azimuth}", f"{anchor2_id}_Azimuth}"].
         config (dict): Configuration containing anchor positions and orientations.
         anchor_ids (list): List of anchor IDs.
+        dt (int): Time interval (in milliseconds; converted to seconds internally).
+        threshold (int): Threshold for the number of iterations before starting to save results.
         
     Returns:
         pd.DataFrame: DataFrame with columns ["Time_Bucket", "X_Real", "Y_Real", "X_PF", "Y_PF"].
