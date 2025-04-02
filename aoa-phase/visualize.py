@@ -36,7 +36,9 @@ def visualize_all_anchors_with_heatmap(all_results: dict, gt_column: str, ms_col
         cbar.set_label("A_real - A_measurement")
 
         ax.set_xlabel("X")
+        ax.set_xlim(0, 1200)
         ax.set_ylabel("Y")
+        ax.set_ylim(0, 600)
         ax.set_title(f"Error map for {anchor_id}")
         ax.grid(True)
 

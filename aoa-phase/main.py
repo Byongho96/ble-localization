@@ -51,10 +51,10 @@ def main():
     config = yaml.safe_load(open(os.path.join(base_dir, "../config.yml")))
     delta = config['delta']
 
-    gt_path = os.path.join(base_dir, "../dataset/calibration/gt/gt_calibration.csv")
+    gt_path = os.path.join(base_dir, "../dataset/calibration/gt/gt_static.csv")
     gt_df = pd.read_csv(gt_path)
 
-    ms_path = os.path.join(base_dir, "../dataset/calibration/beacons/beacons_calibration.csv")
+    ms_path = os.path.join(base_dir, "../dataset/calibration/beacons/beacons_static.csv")
     ms_df = pd.read_csv(ms_path)
 
     # Group by anchors
@@ -66,14 +66,12 @@ def main():
         orientation = config['anchors'][anchor_id]['orientation']
     
         anchor_gt_df = dp.filter_with_position_ground_truth(gt_df, anchor_df)
-        anchor_gt_df = anchor_gt_df[anchor_gt_df["AnchorID"] != 6504]
         anchor_gt_discretized_df = dp.discretize_grid_points_by_delta(anchor_gt_df, delta)
         anchor_gt_discretized_aoa_df = dp.calculate_aoa_ground_truth(anchor_gt_discretized_df, position, orientation)
 
         anchors_df_dict[anchor_id] = anchor_gt_discretized_aoa_df
 
     aoa_kf(anchors_df_dict, delta)
-    # aoa_local_kf(filtered_df)
 
 if __name__ == '__main__':
     main()
