@@ -1,6 +1,6 @@
 import pandas as pd
 
-def filter_with_position_ground_truth(gt_df: pd.DataFrame, ms_df: pd.DataFrame) -> pd.DataFrame:
+def filter_with_position_ground_truth(gt_df: pd.DataFrame, ms_df: pd.DataFrame, offset: int) -> pd.DataFrame:
     '''
     Filter the measurement data by the ground truth data.
 
@@ -16,7 +16,7 @@ def filter_with_position_ground_truth(gt_df: pd.DataFrame, ms_df: pd.DataFrame) 
     for row in gt_df.itertuples(index=False):
         start_timestamp, end_timestamp, x, y = row
         
-        mask = (ms_df["Timestamp"] >= start_timestamp) & (ms_df["Timestamp"] <= end_timestamp)
+        mask = (ms_df["Timestamp"] >= start_timestamp + offset) & (ms_df["Timestamp"] <= end_timestamp - offset)
         filtered = ms_df.loc[mask].copy()
         filtered["X_Real"] = x
         filtered["Y_Real"] = y

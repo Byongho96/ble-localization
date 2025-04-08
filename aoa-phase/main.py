@@ -44,7 +44,7 @@ def aoa_kf(dic: dict, delta: int):
     vs.visualize_all_anchors_with_heatmap({anchor_id: results['1d_kf'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_1d_KF', vmin=0, vmax=15, title="1D KF AoA")
     vs.visualize_all_anchors_with_heatmap({anchor_id: results['2d_kf'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_2d_KF', vmin=0, vmax=15, title="2D KF AoA")
 
-def main():
+def calibration():
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
     # Load files
@@ -66,12 +66,54 @@ def main():
         orientation = config['anchors'][anchor_id]['orientation']
     
         anchor_gt_df = dp.filter_with_position_ground_truth(gt_df, anchor_df)
-        anchor_gt_discretized_df = dp.discretize_grid_points_by_delta(anchor_gt_df, delta)
+        anchor_gt_discretized_df = dp.discretize_by_delta(anchor_gt_df, delta)
         anchor_gt_discretized_aoa_df = dp.calculate_aoa_ground_truth(anchor_gt_discretized_df, position, orientation)
 
         anchors_df_dict[anchor_id] = anchor_gt_discretized_aoa_df
 
     aoa_kf(anchors_df_dict, delta)
 
+def mobility():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # Load Config
+    config = yaml.safe_load(open(os.path.join(base_dir, "../config.yml")))
+    delta = config['delta']
+    threshold = config['threshold']
+
+    # Load files
+    gt_path = os.path.join(base_dir, "../dataset/mobility/gt/use-case1/gt_mobility_use-case1_run1.csv")
+    gt_df = pd.read_csv(gt_path)
+
+    ms_path = os.path.join(base_dir, "../dataset/mobility/beacons/use-case1/beacons_mobility_use-case1_run1.csv")
+    ms_df = pd.read_csv(ms_path)
+
+    # Interpolate the ground truth data
+    gt_interpolated_df = dp.interpolate_ground_truth(gt_df, delta)
+
+    # Group by anchors
+    anchors_df_dict = { anchor_id: anchor_df for anchor_id, anchor_df in ms_df.groupby("AnchorID") }
+    anchor_ids = list(anchors_df_dict.keys())
+
+    # Preprocess the data
+    for anchor_id, anchor_df in anchors_df_dict.items():
+        position = config['anchors'][anchor_id]['position']   
+        orientation = config['anchors'][anchor_id]['orientation']
+
+        anchor_gt_df = dp.filter_with_position_ground_truth(gt_interpolated_df, anchor_df)
+        anchor_gt_discretized_df = dp.discretize_by_delta(anchor_gt_df, delta)
+        anchor_gt_discretized_aoa_df = dp.calculate_aoa_ground_truth(anchor_gt_discretized_df, position, orientation)
+
+        # Filter the data
+        # anchor_gt_discretized_aoa_df = anchor_gt_discretized_aoa_df[ anchor_gt_discretized_aoa_df['AnchorID'] != 6503 ]
+        anchor_gt_discretized_aoa_df =  anchor_gt_discretized_aoa_df[ anchor_gt_discretized_aoa_df['Azimuth_Real'].abs() <= 45]
+        
+        anchors_df_dict[anchor_id] = anchor_gt_discretized_aoa_df 
+
+    # Merge the dataframes
+    vs.visualize_all_anchors_with_heatmap(anchors_df_dict, 'Azimuth_Real', 'Azimuth', vmin=0, vmax=15, title="Raw AoA")   
+
+
 if __name__ == '__main__':
-    main()
+    # calibration()
+    mobility()

@@ -2,63 +2,134 @@ import os
 import yaml
 import pandas as pd
 import data_processing as dp
+import statistical_analysis as sa
 import visualize as vs
-from LOSClassifier import LOSClassifier 
+
+base_dir = os.path.dirname(os.path.abspath(__file__))
 
 def aoa():
-    TARGET_ANCHOR_ID = 6504
-    TARGET_POINTS_1 = [(120, 480), (1080, 480), (540, 420), (660, 420)]
-
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-
     # Load files
+    config = yaml.safe_load(open(os.path.join(base_dir, "../config.yml")))
+    delta = config['delta']
+    offset = config['offset']
+
     gt_path = os.path.join(base_dir, "../dataset/calibration/gt/gt_calibration.csv")
     gt_df = pd.read_csv(gt_path)
 
     ms_path = os.path.join(base_dir, "../dataset/calibration/beacons/beacons_calibration.csv")
     ms_df = pd.read_csv(ms_path)
 
-    # Filter the target anchor and ground truth data
-    anchor_df = ms_df[ms_df["AnchorID"] == TARGET_ANCHOR_ID]
-    anchor_gt_df = dp.filter_with_position_ground_truth(gt_df, anchor_df)
+    # Group by anchors
+    anchors_df_dict = { anchor_id: anchor_df for anchor_id, anchor_df in ms_df.groupby("AnchorID") }
 
-    vs.plot_aoa_distribution(anchor_gt_df, TARGET_POINTS_1)
-    vs.plot_rssi_distribution(anchor_gt_df, TARGET_POINTS_1, 37)
+    # Preprocess the data
+    for anchor_id, anchor_df in anchors_df_dict.items():   
+        anchor_gt_df = dp.filter_with_position_ground_truth(gt_df, anchor_df, offset)
+        anchor_gt_discretized_df = dp.discretize_by_delta(anchor_gt_df, delta)
 
-def los():
-    TARGET_ANCHOR_ID = 6501
-    TARGET_POINTS_1 = [(720, 240), (840, 240), (960, 240)]
+        anchors_df_dict[anchor_id] = anchor_gt_discretized_df
+
+    # Calculate the statistics
+    all_anchors_results = {}
+
+    for anchor_id, anchor_df in anchors_df_dict.items():
+        anchor_results = []
+
+        # Filter the data
+        for (x, y), point_df in anchor_df.groupby(["X_Real", "Y_Real"]):
+            anchor_results.append(sa.calculate_statistics(point_df, 'Azimuth'))
+
+        # Concatenate the results
+        all_anchors_results[anchor_id] = pd.concat(anchor_results, ignore_index=True)
+
+    print('df', all_anchors_results   )
+
+    # Show the results
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results for anchor_id, results in all_anchors_results.items()}, 'Sigma', vmin=0, vmax=10)   
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results for anchor_id, results in all_anchors_results.items()}, 'S', vmin= -5, vmax= 5)   
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results for anchor_id, results in all_anchors_results.items()}, 'K', vmin =0, vmax = 50)   
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results for anchor_id, results in all_anchors_results.items()}, 'Hyper_Skew', vmin= -100, vmax = 300)   
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results for anchor_id, results in all_anchors_results.items()}, 'Peak_Prob', vmin= 0, vmax= 5)   
+
+def rssi():
+    # Load files
+    config = yaml.safe_load(open(os.path.join(base_dir, "../config.yml")))
+    delta = config['delta']
+    offset = config['offset']
+
+    gt_path = os.path.join(base_dir, "../dataset/static/gt/gt_static_east.csv")
+    gt_df = pd.read_csv(gt_path)
+
+    ms_path = os.path.join(base_dir, "../dataset/static/beacons/beacons_static_east.csv")
+    ms_df = pd.read_csv(ms_path)
+
+    # Filter with channel
+    ms_df = ms_df[ms_df['Channel'] == 37]
+
+    # Group by anchors
+    anchors_df_dict = { anchor_id: anchor_df for anchor_id, anchor_df in ms_df.groupby("AnchorID") }
+
+    # Preprocess the data
+    for anchor_id, anchor_df in anchors_df_dict.items():   
+        anchor_gt_df = dp.filter_with_position_ground_truth(gt_df, anchor_df, offset)
+        anchor_gt_discretized_df = dp.discretize_by_delta(anchor_gt_df, delta)
+
+        anchors_df_dict[anchor_id] = anchor_gt_discretized_df
+
+    # Calculate the statistics
+    all_anchors_results = {}
+
+    for anchor_id, anchor_df in anchors_df_dict.items():
+        anchor_results = []
+
+        # Filter the data
+        for (x, y), point_df in anchor_df.groupby(["X_Real", "Y_Real"]):
+            anchor_results.append(sa.calculate_statistics(point_df, '1stP'))
+
+        # Concatenate the results
+        all_anchors_results[anchor_id] = pd.concat(anchor_results, ignore_index=True)
 
 
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    # Show the results
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results for anchor_id, results in all_anchors_results.items()}, 'Sigma', vmin=0, vmax=3)   
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results for anchor_id, results in all_anchors_results.items()}, 'S', vmin= -1, vmax = 1)   
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results for anchor_id, results in all_anchors_results.items()}, 'K', vmin =0, vmax = 5)   
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results for anchor_id, results in all_anchors_results.items()}, 'Hyper_Skew', vmin = -30, vmax = 20)   
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results for anchor_id, results in all_anchors_results.items()}, 'Peak_Prob', vmin = 0.1, vmax = 0.5)   
+
+def point():
+    CHANNEL = 39
+    ANCHOR_ID = 6504
+    TAG_POINTS = [
+        (840, 480), # BAD
+        (480, 360) # GOOD
+    ]
 
     # Load files
-    gt_path_1 = os.path.join(base_dir, "../dataset/static/gt/gt_static_east.csv")
-    gt_df_1 = pd.read_csv(gt_path_1)
+    config = yaml.safe_load(open(os.path.join(base_dir, "../config.yml")))
+    delta = config['delta']
+    offset = config['offset']
 
-    gt_path_2 = os.path.join(base_dir, "../dataset/static/gt/gt_static_west.csv")
-    gt_df_2 = pd.read_csv(gt_path_2)
+    gt_path = os.path.join(base_dir, "../dataset/calibration/gt/gt_calibration.csv")
+    gt_df = pd.read_csv(gt_path)
 
-    ms_path_1 = os.path.join(base_dir, "../dataset/static/beacons/beacons_static_east.csv")
-    ms_df_1 = pd.read_csv(ms_path_1)
+    ms_path = os.path.join(base_dir, "../dataset/calibration/beacons/beacons_calibration.csv")
+    ms_df = pd.read_csv(ms_path)
 
-    ms_path_2 = os.path.join(base_dir, "../dataset/static/beacons/beacons_static_west.csv")
-    ms_df_2 = pd.read_csv(ms_path_2)
+    # Filter with channel and anchor ID
+    ms_df = ms_df[ms_df['Channel'] == CHANNEL]
+    ms_df = ms_df[ms_df['AnchorID'] == ANCHOR_ID]
 
-    # Filter the target anchor and ground truth data
-    anchor_df_1 = ms_df_1[ms_df_1["AnchorID"] == TARGET_ANCHOR_ID]
-    anchor_gt_df_1 = dp.filter_with_position_ground_truth(gt_df_1, anchor_df_1)
+    # Preprocess the data
+    anchor_gt_df = dp.filter_with_position_ground_truth(gt_df, ms_df, offset)
+    anchor_gt_discretized_df = dp.discretize_by_delta(anchor_gt_df, delta)
 
-    anchor_df_2 = ms_df_2[ms_df_2["AnchorID"] == TARGET_ANCHOR_ID]
-    anchor_gt_df_2 = dp.filter_with_position_ground_truth(gt_df_2, anchor_df_2)
-
-    vs.plot_aoa_distribution(anchor_gt_df_1, TARGET_POINTS_1)
-    vs.plot_rssi_distribution(anchor_gt_df_1, TARGET_POINTS_1, 37)
-
-    vs.plot_aoa_distribution(anchor_gt_df_2, TARGET_POINTS_1)
-    vs.plot_rssi_distribution(anchor_gt_df_2, TARGET_POINTS_1, 37)
+    # Show the results
+    vs.plot_distribution(anchor_gt_discretized_df, TAG_POINTS, 'Azimuth')   
+    vs.plot_distribution(anchor_gt_discretized_df, TAG_POINTS, '1stP')   
+    vs.plot_distribution(anchor_gt_discretized_df, TAG_POINTS, '2ndP')   
 
 if __name__ == "__main__":
-    aoa()
-    # los()
-    
+    # aoa()
+    # rssi()
+    point()

@@ -4,6 +4,8 @@ import pandas as pd
 from filterpy.kalman import KalmanFilter, ExtendedKalmanFilter, UnscentedKalmanFilter, MerweScaledSigmaPoints
 from ParticleFilter import ParticleFilter
 
+LEAST_ANCHORS = 3
+
 def least_squares_triangulation(df: pd.DataFrame, config: dict, anchor_ids: list) -> pd.DataFrame:
     """
     Least Squares Triangulation
@@ -21,15 +23,26 @@ def least_squares_triangulation(df: pd.DataFrame, config: dict, anchor_ids: list
     for time_bucket, row in df.iterrows():
         H = []
         C = []
+        valid_anchor_count = 0
         
         for anchor in anchor_ids:
             azimuth = row[f"{anchor}_Azimuth"]
+            
+            # skip if azimuth is missing (NaN)
+            if pd.isna(azimuth):
+                continue  
+
             pos = config["anchors"][anchor]["position"]
             orientation = config["anchors"][anchor]["orientation"]
 
             aoa_rad = math.radians(90 - azimuth - orientation)
             H.append([-math.tan(aoa_rad), 1])
             C.append([pos[1] - pos[0] * math.tan(aoa_rad)])
+            valid_anchor_count += 1
+        
+        # skip if fewer than 2 valid anchors
+        if valid_anchor_count < LEAST_ANCHORS:
+            continue  
         
         H = np.array(H)
         C = np.array(C)
@@ -108,7 +121,8 @@ def local_2D_kalman_filter(df: pd.DataFrame, dt: int = 20) -> pd.DataFrame:
 
 def local_extended_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: list, dt: int = 20, threshold: int = 0) -> pd.DataFrame:
     """
-    Extended kalman filter with constant velocity model (state: [x, y, vx, vy]).`
+    Extended Kalman Filter with constant velocity model (state: [x, y, vx, vy]).
+    Supports variable number of valid AoA measurements per time step.
     
     Parameters:
         df (pd.DataFrame): DataFrame with ["X_Real", "Y_Real"] and each anchor's "Azimuth" information.
@@ -118,14 +132,11 @@ def local_extended_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: lis
         threshold (int): Threshold for the number of iterations before starting to save results.
     
     Returns:
-        pd.DataFrame: Dataframe with ["Time_Bucket", "X_Real", "Y_Real", "X_EKF", "Y_EKF"] columns.
+        pd.DataFrame: DataFrame with ["Time_Bucket", "X_Real", "Y_Real", "X_EKF", "Y_EKF"] columns.
     """
     print("Start the Extended Kalman Filter Process")
     
-    dt /= 1000  # ms -> sec
-    num_anchors = len(anchor_ids)
-    anchors_position = np.array([config["anchors"][aid]["position"] for aid in anchor_ids])
-    anchors_orientation = np.array([config["anchors"][aid]["orientation"] for aid in anchor_ids])
+    dt /= 1000  # Convert ms to seconds
     
     # State Transition Function (constant velocity model)
     def fx(x, dt):
@@ -136,109 +147,323 @@ def local_extended_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: lis
             [0,  0,  0,  1]
         ])
         return F @ x
-    fx_lambda = lambda x: fx(x, dt) # Capture dt in lambda function
-    
-    # Jacobian of the state transition function. Same as F in this case
+    fx_lambda = lambda x: fx(x, dt)
+
+    # Jacobian of the state transition function (same as F)
     def FJacobian(x, dt):
-        F = np.array([
+        return np.array([
             [1,  0, dt,  0],
             [0,  1,  0, dt],
             [0,  0,  1,  0],
             [0,  0,  0,  1]
         ])
-        return F
-    FJacobian_lambda = lambda x: FJacobian(x, dt) # Capture dt in lambda function
-    
-    # Measurement Function
-    anchors_orientation_rad = np.deg2rad(anchors_orientation)
-    def hx(x):
-        pos = x[:2]
-        predicted_angles = []
-        for (ax, ay), a_ori_rad in zip(anchors_position, anchors_orientation_rad):
-            angle = np.arctan2(pos[0] - ax, pos[1] - ay) - a_ori_rad
-            angle = (angle + np.pi) % (2 * np.pi) - np.pi
-            predicted_angles.append(np.degrees(angle))
-        return np.array(predicted_angles)
-    
-    # Jacobian of the measurement function
-    def HJacobian(x):
-        H = np.zeros((num_anchors, 4))
-        for i, a_pos in enumerate(anchors_position):
-            r = x[0] - a_pos[0]
-            s = x[1] - a_pos[1]
-            denom = r**2 + s**2
-            if denom == 0:
-                H[i, 0] = 0
-                H[i, 1] = 0
-            else:
-                H[i, 0] = (180/np.pi) * (s / denom)
-                H[i, 1] = (180/np.pi) * (-r / denom)
-        return H
-    
-    ekf = ExtendedKalmanFilter(dim_x=4, dim_z=num_anchors)
+    FJacobian_lambda = lambda x: FJacobian(x, dt)
+
+    # Initialize EKF
+    ekf = ExtendedKalmanFilter(dim_x=4, dim_z=1)  # dim_z will be adjusted dynamically
 
     # Initial state
-    initial_state = np.array([
+    ekf.x = np.array([
         np.random.uniform(0, 1200),
         np.random.uniform(0, 600),
         0.0,
         0.0
     ])
-    ekf.x = initial_state.copy()
-    
-    # Initial Covariance
+
+    # Initial covariance
     ekf.P *= 500.0
-    
-    # Measurement Noise
-    ekf.R = np.eye(num_anchors) * (6.0 ** 2)
-    
-    # Set the state transition function and its Jacobian
+
+    # Process noise (pos_noise_std = 10, vel_noise_std = 1)
+    ekf.Q = np.diag([10**2, 10**2, 1**2, 1**2])
+
+    # Set state transition functions
     ekf.fx = fx_lambda
     ekf.FJacobian = FJacobian_lambda
-    
-    # Process Noise (pos_noise_std = 10, vel_noise_std = 1)
-    ekf.Q = np.diag([10**2, 10**2, 1**2, 1**2])
-    
+
     estimated_positions = []
     th = 0
-    
+
     # Run the EKF
     for time_bucket, row in df.iterrows():
-        measured_aoa = np.array([row[f"{aid}_Azimuth"] for aid in anchor_ids])
-        
+        measured_aoa = []
+        valid_positions = []
+        valid_orientations = []
+
+        for aid in anchor_ids:
+            az = row.get(f"{aid}_Azimuth", np.nan)
+            if not pd.isna(az):
+                measured_aoa.append(az)
+                valid_positions.append(config["anchors"][aid]["position"])
+                valid_orientations.append(config["anchors"][aid]["orientation"])
+
+        if len(measured_aoa) < LEAST_ANCHORS:
+            continue  # Skip update if fewer than 2 anchors are available
+
+        measured_aoa = np.array(measured_aoa)
+        anchors_position_np = np.array(valid_positions)
+        anchors_orientation_rad = np.deg2rad(valid_orientations)
+
+        # Measurement function (variable-length)
+        def hx(x):
+            pos = x[:2]
+            predicted_angles = []
+            for (ax, ay), a_ori_rad in zip(anchors_position_np, anchors_orientation_rad):
+                angle = np.arctan2(pos[0] - ax, pos[1] - ay) - a_ori_rad
+                angle = (angle + np.pi) % (2 * np.pi) - np.pi
+                predicted_angles.append(np.degrees(angle))
+            return np.array(predicted_angles)
+
+        # Jacobian of the measurement function
+        def HJacobian(x):
+            H = np.zeros((len(anchors_position_np), 4))
+            for i, (ax, ay) in enumerate(anchors_position_np):
+                dx = x[0] - ax
+                dy = x[1] - ay
+                denom = dx**2 + dy**2
+                if denom == 0:
+                    H[i, 0] = 0
+                    H[i, 1] = 0
+                else:
+                    H[i, 0] = (180 / np.pi) * (dy / denom)
+                    H[i, 1] = (180 / np.pi) * (-dx / denom)
+            return H
+
+        # Measurement noise (adjusted dynamically)
+        ekf.R = np.eye(len(measured_aoa)) * (6.0 ** 2)
+
+        # Predict and update
         ekf.predict()
         ekf.update(measured_aoa, HJacobian, hx)
+
         x_ekf, y_ekf = ekf.x[0], ekf.x[1]
 
         th += 1
         if th > threshold:
             estimated_positions.append([time_bucket, row["X_Real"], row["Y_Real"], x_ekf, y_ekf])
-    
+
     return pd.DataFrame(estimated_positions, columns=["Time_Bucket", "X_Real", "Y_Real", "X_EKF", "Y_EKF"])
 
+def local_imm_extended_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: list, dt: int = 20, threshold: int = 0) -> pd.DataFrame:
+    """
+    IMM-EKF for BLE tag localization based on AoA measurements.
+    Uses three models:
+      - Constant Velocity (CV): state = [x, y, vx, vy]
+      - Constant Acceleration (CA): state = [x, y, vx, vy, ax, ay]
+      - Stop Model: state = [x, y]
+    The final position is computed as the weighted combination (based on likelihood) of each model’s estimate.
+    
+    Parameters:
+        df (pd.DataFrame): DataFrame with ["X_Real", "Y_Real"] and each anchor's "Azimuth" info.
+        config (dict): Configuration containing anchor positions and orientations.
+        anchor_ids (list): List of anchor IDs.
+        dt (int): Time interval in milliseconds.
+        threshold (int): Minimum iteration count before saving results.
+        
+    Returns:
+        pd.DataFrame: DataFrame with ["Time_Bucket", "X_Real", "Y_Real", "X_IMM", "Y_IMM"] columns.
+    """
+    print("Start the IMM-EKF Process")
+    dt /= 1000  # Convert ms to seconds
+    
+    # --- Model definitions ---
+    # CV Model: [x, y, vx, vy]
+    def fx_cv(x):
+        F = np.array([
+            [1, 0, dt, 0],
+            [0, 1, 0, dt],
+            [0, 0, 1,  0],
+            [0, 0, 0,  1]
+        ])
+        return F @ x
+
+    def FJacobian_cv(x):
+        return np.array([
+            [1, 0, dt, 0],
+            [0, 1, 0, dt],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
+        ])
+    
+    # CA Model: [x, y, vx, vy, ax, ay]
+    def fx_ca(x):
+        dt2 = 0.5 * dt * dt
+        F = np.array([
+            [1, 0, dt, 0, dt2, 0],
+            [0, 1, 0, dt, 0, dt2],
+            [0, 0, 1, 0, dt, 0],
+            [0, 0, 0, 1, 0, dt],
+            [0, 0, 0, 0, 1,  0],
+            [0, 0, 0, 0, 0,  1]
+        ])
+        return F @ x
+
+    def FJacobian_ca(x):
+        dt2 = 0.5 * dt * dt
+        return np.array([
+            [1, 0, dt, 0, dt2, 0],
+            [0, 1, 0, dt, 0, dt2],
+            [0, 0, 1, 0, dt, 0],
+            [0, 0, 0, 1, 0, dt],
+            [0, 0, 0, 0, 1, 0],
+            [0, 0, 0, 0, 0, 1]
+        ])
+    
+    # Stop Model: [x, y]
+    def fx_stop(x):
+        return x  # No change
+
+    def FJacobian_stop(x):
+        return np.eye(2)
+    
+    # --- Initialize EKFs for each model ---
+    ekf_cv   = ExtendedKalmanFilter(dim_x=4, dim_z=1)
+    ekf_ca   = ExtendedKalmanFilter(dim_x=6, dim_z=1)
+    ekf_stop = ExtendedKalmanFilter(dim_x=2, dim_z=1)
+    
+    # 초기 상태 (동일한 시작점 사용)
+    init_x = np.random.uniform(0, 1200)
+    init_y = np.random.uniform(0, 600)
+    ekf_cv.x   = np.array([init_x, init_y, 0.0, 0.0])
+    ekf_ca.x   = np.array([init_x, init_y, 0.0, 0.0, 0.0, 0.0])
+    ekf_stop.x = np.array([init_x, init_y])
+    
+    # 공분산 초기화
+    ekf_cv.P   *= 500.0
+    ekf_ca.P   *= 500.0
+    ekf_stop.P *= 500.0
+    
+    # 프로세스 노이즈
+    ekf_cv.Q   = np.diag([10**2, 10**2, 1**2, 1**2])
+    ekf_ca.Q   = np.diag([10**2, 10**2, 1**2, 1**2, 0.1**2, 0.1**2])
+    ekf_stop.Q = np.diag([10**2, 10**2])
+    
+    # 상태 전이 함수 설정
+    ekf_cv.fx = lambda x: fx_cv(x)
+    ekf_cv.FJacobian = lambda x: FJacobian_cv(x)
+    ekf_ca.fx = lambda x: fx_ca(x)
+    ekf_ca.FJacobian = lambda x: FJacobian_ca(x)
+    ekf_stop.fx = lambda x: fx_stop(x)
+    ekf_stop.FJacobian = lambda x: FJacobian_stop(x)
+    
+    # 모델들 및 초기 모델 확률 (동일 가중치)
+    model_names = ['cv', 'ca', 'stop']
+    ekfs = {'cv': ekf_cv, 'ca': ekf_ca, 'stop': ekf_stop}
+    probs = np.array([1/3, 1/3, 1/3])
+    
+    estimated_positions = []
+    th = 0
+
+    # --- IMM-EKF Loop: 각 시간 스텝마다 측정 처리 ---
+    for time_bucket, row in df.iterrows():
+        measured_aoa = []
+        valid_positions = []
+        valid_orientations = []
+        for aid in anchor_ids:
+            az = row.get(f"{aid}_Azimuth", np.nan)
+            if not pd.isna(az):
+                measured_aoa.append(az)
+                valid_positions.append(config["anchors"][aid]["position"])
+                valid_orientations.append(config["anchors"][aid]["orientation"])
+
+        if len(measured_aoa) < LEAST_ANCHORS:
+            continue  # 충분한 앵커가 없으면 스킵
+
+        measured_aoa = np.array(measured_aoa)
+        anchors_position_np = np.array(valid_positions)
+        anchors_orientation_rad = np.deg2rad(valid_orientations)
+        
+        # 공통 측정 함수: 상태 벡터의 첫 2개 값(위치)로부터 예측 각도 계산
+        def hx(x):
+            pos = x[:2]
+            predicted_angles = []
+            for (ax, ay), a_ori_rad in zip(anchors_position_np, anchors_orientation_rad):
+                angle = np.arctan2(pos[0] - ax, pos[1] - ay) - a_ori_rad
+                angle = (angle + np.pi) % (2 * np.pi) - np.pi  # normalize to [-pi, pi]
+                predicted_angles.append(np.degrees(angle))
+            return np.array(predicted_angles)
+        
+        # 측정 함수의 자코비안 (상태 차원에 맞게 패딩)
+        def HJacobian(x):
+            n_anchors = len(anchors_position_np)
+            # 2차원에 대한 기초 자코비안 계산
+            H_base = np.zeros((n_anchors, 2))
+            for i, (ax, ay) in enumerate(anchors_position_np):
+                dx = x[0] - ax
+                dy = x[1] - ay
+                denom = dx**2 + dy**2
+                if denom == 0:
+                    H_base[i, :] = 0
+                else:
+                    H_base[i, 0] = (180 / np.pi) * (dy / denom)
+                    H_base[i, 1] = (180 / np.pi) * (-dx / denom)
+            # x의 길이에 맞춰 오른쪽에 0 패딩
+            dim = len(x)
+            H_full = np.hstack((H_base, np.zeros((n_anchors, dim - 2))))
+            return H_full
+        
+        # 측정 노이즈: 앵커 개수에 따라 동적으로 결정
+        R = np.eye(len(measured_aoa)) * (6.0 ** 2)
+        for name in model_names:
+            ekfs[name].R = R
+
+        # Step 1: 각 모델별로 예측
+        for name in model_names:
+            ekfs[name].predict()
+        
+        # Step 2: 각 모델별로 업데이트 및 likelihood 계산
+        likelihoods = []
+        for name in model_names:
+            try:
+                ekfs[name].update(measured_aoa, HJacobian, hx)
+                # innovation과 covariance를 이용한 likelihood 계산
+                y = ekfs[name].y
+                S = ekfs[name].S
+                det_S = np.linalg.det(S)
+                if det_S <= 0:
+                    det_S = 1e-10
+                inv_S = np.linalg.inv(S)
+                likelihood = np.exp(-0.5 * (y.T @ inv_S @ y)) / np.sqrt((2 * np.pi)**len(y) * det_S)
+            except Exception:
+                likelihood = 1e-10
+            likelihoods.append(likelihood)
+        likelihoods = np.array(likelihoods)
+        
+        # Step 3: 모델 확률 갱신 (기존 확률과 likelihood 곱 후 정규화)
+        probs = probs * likelihoods
+        if probs.sum() == 0:
+            probs = np.array([1/3, 1/3, 1/3])
+        else:
+            probs /= probs.sum()
+        
+        # Step 4: 최종 위치 추정: 각 모델의 추정 위치(x[0:2])의 가중평균
+        pos_est = np.zeros(2)
+        for i, name in enumerate(model_names):
+            pos_est += probs[i] * ekfs[name].x[:2]
+        
+        th += 1
+        if th > threshold:
+            estimated_positions.append([time_bucket, row["X_Real"], row["Y_Real"], pos_est[0], pos_est[1]])
+    
+    return pd.DataFrame(estimated_positions, columns=["Time_Bucket", "X_Real", "Y_Real", "X_IMM", "Y_IMM"])
 
 def local_unscented_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: list, dt: int = 20, threshold: int = 0) -> pd.DataFrame:
     """
-    Local Unscented Kalman Filter
-
+    Local Unscented Kalman Filter with variable number of valid AoA measurements per time step.
+    
     Parameters:
         df (pd.DataFrame): DataFrame with ["X_Real", "Y_Real"] and each anchor's "Azimuth" information.
         config (dict): Configuration containing anchor positions and orientations.
         anchor_ids (list): List of anchor IDs.
         dt (int): Time interval (in milliseconds; converted to seconds internally).
-
+    
     Returns:
-        pd.DataFrame: ["Time_Bucket", "X_Real", "Y_Real", "X_UKF", "Y_UKF"] 컬럼 포함 DataFrame.
+        pd.DataFrame: DataFrame with ["Time_Bucket", "X_Real", "Y_Real", "X_UKF", "Y_UKF"] columns.
     """
     print("Start the Unscented Kalman Filter Process")
     
-    dt /= 1000  # ms -> sec
+    dt /= 1000  # Convert ms to seconds
 
-    num_anchors = len(anchor_ids)
-    anchors_position = np.array([config["anchors"][aid]["position"] for aid in anchor_ids])
-    anchors_orientation = np.array([config["anchors"][aid]["orientation"] for aid in anchor_ids])
-    
-    # fx : State Transition Function
+    # fx : State Transition Function (constant velocity)
     def fx(x: np.ndarray, dt: float) -> np.ndarray:
         F = np.array([
             [1, 0, dt, 0],
@@ -248,90 +473,99 @@ def local_unscented_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: li
         ])
         return F @ x
 
-    # hx : Measurement Function
-    anchors_orientation_rad = np.deg2rad(anchors_orientation)
-    def hx(x: np.ndarray) -> np.ndarray:
-        pos = x[:2]
-        predicted_angles = []
-        for (ax, ay), a_ori_rad in zip(anchors_position, anchors_orientation_rad):
-            angle = np.arctan2(pos[0] - ax, pos[1] - ay) - a_ori_rad
-            angle = (angle + np.pi) % (2 * np.pi) - np.pi
-            predicted_angles.append(np.degrees(angle))
-        return np.array(predicted_angles)
-    
-    # Sigma Points
+    # Sigma points generator
     points = MerweScaledSigmaPoints(n=4, alpha=0.1, beta=2, kappa=0)
-    
-    # Unscented Kalman Filter
-    ukf = UnscentedKalmanFilter(dim_x=4, dim_z=num_anchors, dt=dt, fx=fx, hx=hx, points=points)
-    
-    # Measurement Noise
-    ukf.R = np.eye(num_anchors) * (6.0 ** 2)
-    
-    # Process Noise (pos_noise_std = 10, vel_noise_std = 1)
-    ukf.Q = np.diag([10**2, 10**2, 1**2, 1**2])
-    
-    # Initial State
-    initial_state = np.array([
+
+    # UKF instance (measurement dimension will vary later)
+    ukf = UnscentedKalmanFilter(dim_x=4, dim_z=1, dt=dt, fx=fx, hx=None, points=points)
+
+    # Initial state
+    ukf.x = np.array([
         np.random.uniform(0, 1200),
         np.random.uniform(0, 600),
         0.0,
         0.0
     ])
-    ukf.x = initial_state.copy()
 
-    # Initial Covariance
+    # Initial covariance
     ukf.P = np.eye(4) * 500.0
-    
+
+    # Process noise (position std = 10, velocity std = 1)
+    ukf.Q = np.diag([10**2, 10**2, 1**2, 1**2])
+
     estimated_positions = []
     th = 0
 
     # Run the UKF
     for time_bucket, row in df.iterrows():
-        measured_aoa = np.array([row[f"{aid}_Azimuth"] for aid in anchor_ids])
-        
+        measured_aoa = []
+        valid_positions = []
+        valid_orientations = []
+
+        for aid in anchor_ids:
+            az = row.get(f"{aid}_Azimuth", np.nan)
+            if not pd.isna(az):
+                measured_aoa.append(az)
+                valid_positions.append(config["anchors"][aid]["position"])
+                valid_orientations.append(config["anchors"][aid]["orientation"])
+
+        if len(measured_aoa) < LEAST_ANCHORS:
+            continue  # Require at least 2 valid anchors
+
+        measured_aoa = np.array(measured_aoa)
+        anchors_position_np = np.array(valid_positions)
+        anchors_orientation_rad = np.deg2rad(valid_orientations)
+
+        # Dynamically redefine hx and R
+        def hx(x: np.ndarray) -> np.ndarray:
+            pos = x[:2]
+            predicted_angles = []
+            for (ax, ay), a_ori_rad in zip(anchors_position_np, anchors_orientation_rad):
+                angle = np.arctan2(pos[0] - ax, pos[1] - ay) - a_ori_rad
+                angle = (angle + np.pi) % (2 * np.pi) - np.pi
+                predicted_angles.append(np.degrees(angle))
+            return np.array(predicted_angles)
+
+        ukf.hx = hx
+        ukf.R = np.eye(len(measured_aoa)) * (6.0 ** 2)  # Adjust R size to match valid anchors
+        ukf.dim_z = len(measured_aoa)  # Update measurement dimension
+
         ukf.predict()
         ukf.update(measured_aoa)
+
         x_ukf, y_ukf = ukf.x[0], ukf.x[1]
 
         th += 1
         if th > threshold:
             estimated_positions.append([time_bucket, row["X_Real"], row["Y_Real"], x_ukf, y_ukf])
-    
+
     return pd.DataFrame(estimated_positions, columns=["Time_Bucket", "X_Real", "Y_Real", "X_UKF", "Y_UKF"])
+
 
 def local_particle_filter(df: pd.DataFrame, config: dict, anchor_ids: list, dt: int = 20, threshold: int = 5) -> pd.DataFrame:
     """
-    Local Particle Filter applied for each group based on ("X_Real", "Y_Real").
-    
+    Local Particle Filter with dynamic number of valid AoA measurements.
+
     Parameters:
-        df (pd.DataFrame): Result from prepare_merged_dataframe(), with the index as Time_Bucket.
-                                  Each anchor's columns are in the format:
-                                  ["X_Real", "Y_Real", f"{anchor1_id}_Azimuth}", f"{anchor2_id}_Azimuth}"].
+        df (pd.DataFrame): DataFrame with ["X_Real", "Y_Real"] and each anchor's "Azimuth" information.
         config (dict): Configuration containing anchor positions and orientations.
         anchor_ids (list): List of anchor IDs.
         dt (int): Time interval (in milliseconds; converted to seconds internally).
-        threshold (int): Threshold for the number of iterations before starting to save results.
-        
+        threshold (int): Threshold before collecting estimated results.
+
     Returns:
-        pd.DataFrame: DataFrame with columns ["Time_Bucket", "X_Real", "Y_Real", "X_PF", "Y_PF"].
+        pd.DataFrame: DataFrame with ["Time_Bucket", "X_Real", "Y_Real", "X_PF", "Y_PF"] columns.
     """
     print("Start the Particle Filter Process")
 
-    dt /= 1000 # ms -> sec
+    dt /= 1000  # Convert ms to seconds
 
-    # Prepare arrays for each anchor's position and orientation.
-    anchors_position = np.array([config["anchors"][aid]["position"] for aid in anchor_ids])
-    anchors_orientation = np.array([config["anchors"][aid]["orientation"] for aid in anchor_ids])
-    
-    # Assume that the ParticleFilter class is already implemented.
+    # Initialize Particle Filter
     pf = ParticleFilter(num_particles=1000, state_bounds=(0, 1200, 0, 600), angle_noise_std=6., dt=dt)
-    
-    # noise
-    pos_noise_std = 10.
-    vel_noise_std = 1.
-    
-    # Run Particle Filter
+
+    pos_noise_std = 10.0
+    vel_noise_std = 1.0
+
     pf.initialize_particles()
 
     estimated_positions = []
@@ -339,12 +573,26 @@ def local_particle_filter(df: pd.DataFrame, config: dict, anchor_ids: list, dt: 
 
     # Run the Particle Filter
     for time_bucket, row in df.iterrows():
-        # Extract the measured AoA for each anchor directly.
-        measured_aoa = np.array([row[f"{aid}_Azimuth"] for aid in anchor_ids])
-        
-        # Execute the Particle Filter predict, update, and estimate steps.
-        pf.predict(pos_noise_std, vel_noise_std) # Put the velocity data here if available.
-        pf.update(measured_aoa, anchors_position, anchors_orientation)
+        measured_aoa = []
+        valid_positions = []
+        valid_orientations = []
+
+        for aid in anchor_ids:
+            az = row.get(f"{aid}_Azimuth", np.nan)
+            if not pd.isna(az):
+                measured_aoa.append(az)
+                valid_positions.append(config["anchors"][aid]["position"])
+                valid_orientations.append(config["anchors"][aid]["orientation"])
+
+        if len(measured_aoa) < LEAST_ANCHORS:
+            continue  # Require at least 2 valid anchors
+
+        measured_aoa = np.array(measured_aoa)
+        anchors_position_np = np.array(valid_positions)
+        anchors_orientation_np = np.array(valid_orientations)
+
+        pf.predict(pos_noise_std, vel_noise_std)
+        pf.update(measured_aoa, anchors_position_np, anchors_orientation_np)
         x_pf, y_pf = pf.estimate()
 
         th += 1

@@ -1,6 +1,49 @@
 import numpy as np
 import pandas as pd
 
+def interpolate_ground_truth(gt_df: pd.DataFrame, dt: int) -> pd.DataFrame:
+    """
+    Interpolates ground truth (gt_df) at fixed dt intervals.
+    - If EndTimestamp is present, keep the position constant (stationary).
+    - If EndTimestamp is NaN, linearly interpolate to the next point.
+
+    Parameters:
+        gt_df (pd.DataFrame): DataFrame with ['StartTimestamp', 'EndTimestamp', 'X', 'Y']
+        dt (int): Time step in the same unit as 'StartTimestamp'
+
+    Returns:
+        pd.DataFrame: Interpolated DataFrame with ['StartTimestamp', 'EndTimestamp', 'X', 'Y']
+    """
+    times, x_vals, y_vals = [], [], []
+
+    for _, row in gt_df.iterrows():
+        times.append(row['StartTimestamp'])
+        x_vals.append(row['X'])
+        y_vals.append(row['Y'])
+        if pd.notna(row['EndTimestamp']):
+            times.append(row['EndTimestamp'])
+            x_vals.append(row['X'])
+            y_vals.append(row['Y'])
+
+    # Sort by time
+    times = np.array(times)
+    x_vals = np.array(x_vals)
+    y_vals = np.array(y_vals)
+    sort_idx = np.argsort(times)
+    times, x_vals, y_vals = times[sort_idx], x_vals[sort_idx], y_vals[sort_idx]
+
+    # Generate new timestamps
+    new_timestamps = np.arange(times[0], times[-1] + dt, dt)
+    new_x = np.interp(new_timestamps, times, x_vals)
+    new_y = np.interp(new_timestamps, times, y_vals)
+
+    return pd.DataFrame({
+        'StartTimestamp': new_timestamps,
+        'EndTimestamp': new_timestamps + dt,
+        'X': new_x,
+        'Y': new_y
+    })
+
 def filter_with_position_ground_truth(gt_df: pd.DataFrame, ms_df: pd.DataFrame) -> pd.DataFrame:
     '''
     Filter the measurement data by the ground truth data.
@@ -50,16 +93,16 @@ def calculate_aoa_ground_truth(df: pd.DataFrame, position: list[float, float, fl
 
     return result_df
 
-def discretize_grid_points_by_delta(df: pd.DataFrame, dt: int = 0) -> pd.DataFrame:
+def discretize_by_delta(df: pd.DataFrame, dt: int = 0) -> pd.DataFrame:
     """
-    Discretize the data at each (X_Real, Y_Real) grid point by time intervals (dt).
+    Discretize the data by time intervals (dt).
 
     Parameters:
         df (pd.DataFrame): Input DataFrame with ['Timestamp', 'X_Real', 'Y_Real'] columns
         dt (int): Time step in the same unit as 'Timestamp'
 
     Returns:
-        pd.DataFrame: Discretized DataFrame averaged by time bucket and grid location
+        pd.DataFrame: Discretized DataFrame averaged by time bucket. ['Time_Bucket'] column is added.
     """
     if not dt:
         return df
@@ -69,9 +112,8 @@ def discretize_grid_points_by_delta(df: pd.DataFrame, dt: int = 0) -> pd.DataFra
     # Create time buckets by discretizing the Timestamp column in dt intervals
     df["Time_Bucket"] = (df["Timestamp"] // dt) * dt
 
-    # Compute mean for each unique (X_Real, Y_Real, Time_Bucket) group
-    discretized_df = df.groupby(["X_Real", "Y_Real", "Time_Bucket"], as_index=False).mean(numeric_only=True)
+    # Compute mean for each unique (Time_Bucket) group
+    discretized_df = df.groupby(["Time_Bucket"], as_index=False).mean(numeric_only=True)
     discretized_df["Timestamp"] = discretized_df["Time_Bucket"] + dt
-    discretized_df = discretized_df.drop(columns=["Time_Bucket"])
 
     return discretized_df

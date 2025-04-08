@@ -3,29 +3,46 @@ import pandas as pd
 
 def interpolate_ground_truth(gt_df: pd.DataFrame, dt: int) -> pd.DataFrame:
     """
-    Interpolate the ground truth data to create a new DataFrame with evenly spaced timestamps.
+    Interpolates ground truth (gt_df) at fixed dt intervals.
+    - If EndTimestamp is present, keep the position constant (stationary).
+    - If EndTimestamp is NaN, linearly interpolate to the next point.
+
+    Parameters:
+        gt_df (pd.DataFrame): DataFrame with ['StartTimestamp', 'EndTimestamp', 'X', 'Y']
+        dt (int): Time step in the same unit as 'StartTimestamp'
+
+    Returns:
+        pd.DataFrame: Interpolated DataFrame with ['StartTimestamp', 'EndTimestamp', 'X', 'Y']
     """
-    # Create a new time index with delta spacing
-    start = gt_df['StartTimestamp'].iloc[0]
-    end = gt_df['StartTimestamp'].iloc[-1]
+    times, x_vals, y_vals = [], [], []
 
-    start_timestamps = np.arange(start, end + dt, dt)
-    end_timestamps = np.arange(start + dt, end + 2 * dt, dt)
+    for _, row in gt_df.iterrows():
+        times.append(row['StartTimestamp'])
+        x_vals.append(row['X'])
+        y_vals.append(row['Y'])
+        if pd.notna(row['EndTimestamp']):
+            times.append(row['EndTimestamp'])
+            x_vals.append(row['X'])
+            y_vals.append(row['Y'])
 
-    # Interpolate X and Y values linearly
-    interp_x = np.interp(start_timestamps, gt_df['StartTimestamp'], gt_df['X'])
-    interp_y = np.interp(end_timestamps, gt_df['StartTimestamp'], gt_df['Y'])
+    # Sort by time
+    times = np.array(times)
+    x_vals = np.array(x_vals)
+    y_vals = np.array(y_vals)
+    sort_idx = np.argsort(times)
+    times, x_vals, y_vals = times[sort_idx], x_vals[sort_idx], y_vals[sort_idx]
 
-    # Create a new DataFrame with interpolated values
-    result = pd.DataFrame({
-        'StartTimestamp': start_timestamps,
-        'EndTimestamp': end_timestamps,
-        'X': interp_x,
-        'Y': interp_y
+    # Generate new timestamps
+    new_timestamps = np.arange(times[0], times[-1] + dt, dt)
+    new_x = np.interp(new_timestamps, times, x_vals)
+    new_y = np.interp(new_timestamps, times, y_vals)
+
+    return pd.DataFrame({
+        'StartTimestamp': new_timestamps,
+        'EndTimestamp': new_timestamps + dt,
+        'X': new_x,
+        'Y': new_y
     })
-
-    return result
-
 
 def filter_with_position_ground_truth(gt_df: pd.DataFrame, ms_df: pd.DataFrame) -> pd.DataFrame:
     '''
@@ -51,6 +68,30 @@ def filter_with_position_ground_truth(gt_df: pd.DataFrame, ms_df: pd.DataFrame) 
         
     return pd.concat(filtered_data, ignore_index=True) if filtered_data else pd.DataFrame()
 
+def calculate_aoa_ground_truth(df: pd.DataFrame, position: list[float, float, float], orientation: float) -> pd.DataFrame:
+    '''
+    Calculate the real azimuth from the ground truth data and add it to the DataFrame.
+
+    Parameters:
+        df (pd.DataFrame): Input DataFrame with ["X_Real", "Y_Real"]
+        position (list[int, int, int]): [x, y, z] position of the anchor
+        orientation (int): Orientation of the reference in degrees
+
+    Returns:
+        pd.DataFrame: DataFrame with new ["Azimuth_Real"] column
+    '''
+    result_df = df.copy()
+
+    # Calculate the azimuth from the ground truth data
+    dx = result_df["X_Real"] - position[0] 
+    dy = result_df["Y_Real"] - position[1]
+
+    # Calculate the azimuth in the real world
+    azimuth_real = np.arctan2(dx, dy) - np.radians(orientation)
+    azimuth_real = np.degrees((azimuth_real + np.pi) % (2 * np.pi) - np.pi)
+    result_df["Azimuth_Real"] = azimuth_real
+
+    return result_df
 
 def discretize_by_delta(df: pd.DataFrame, dt: int = 0) -> pd.DataFrame:
     """
@@ -106,5 +147,6 @@ def prepare_merged_dataframe(dic: dict) -> pd.DataFrame:
         dfs.append(df_temp)
         
     # Merge the DataFrames by Time_Bucket
-    merged_df = pd.concat(dfs, axis=1, join="inner")
+    merged_df = pd.concat(dfs, axis=1, join="outer")
+    merged_df = merged_df.sort_index()
     return merged_df
