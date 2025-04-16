@@ -36,6 +36,8 @@ def rssi_kf(dic: dict, delta: int):
         
         all_anchors_results[anchor_id] = anchor_results
 
+    
+
     # Show the results
     vs.visualize_all_anchors_with_heatmap({anchor_id: results['raw'] for anchor_id, results in all_anchors_results.items()}, 'Distance', 'RSSI_Distance', vmin=0, vmax=300, title="Raw RSSI Distance")   
     # vs.visualize_all_anchors_with_heatmap({anchor_id: results['maf'] for anchor_id, results in all_anchors_results.items()}, 'Distance', 'RSSI_Distance_MAF', vmin=0, vmax=300, title="MAF RSSI Distance")
@@ -84,10 +86,10 @@ def calibration(anchors_parameters_dict):
     offset = config['offset']
     delta = config['delta']
 
-    gt_path = os.path.join(base_dir, "../dataset/static/gt/gt_static_south.csv")
+    gt_path = os.path.join(base_dir, "../dataset/calibration/gt/gt_calibration.csv")
     gt_df = pd.read_csv(gt_path)
 
-    ms_path = os.path.join(base_dir, "../dataset/static/beacons/beacons_static_south.csv")
+    ms_path = os.path.join(base_dir, "../dataset/calibration/beacons/beacons_calibration.csv")
     ms_df = pd.read_csv(ms_path)
 
     # Group by anchors

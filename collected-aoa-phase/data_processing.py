@@ -58,12 +58,13 @@ def filter_with_position_ground_truth(gt_df: pd.DataFrame, ms_df: pd.DataFrame, 
     filtered_data = []
 
     for row in gt_df.itertuples(index=False):
-        start_timestamp, end_timestamp, x, y = row
+        s_iso, start_timestamp, e_iso, end_timestamp, x, y, z = row
         
         mask = (ms_df["Timestamp"] >= start_timestamp + offset) & (ms_df["Timestamp"] <= end_timestamp - offset)
         filtered = ms_df.loc[mask].copy()
         filtered["X_Real"] = x
         filtered["Y_Real"] = y
+        filtered["Z_Real"] = z 
         filtered_data.append(filtered)
         
     return pd.concat(filtered_data, ignore_index=True) if filtered_data else pd.DataFrame()
@@ -85,11 +86,17 @@ def calculate_aoa_ground_truth(df: pd.DataFrame, position: list[float, float, fl
     # Calculate the azimuth from the ground truth data
     dx = result_df["X_Real"] - position[0] 
     dy = result_df["Y_Real"] - position[1]
+    dz = result_df["Z_Real"] - position[2] if "Z_Real" in result_df.columns else 0
 
     # Calculate the azimuth in the real world
     azimuth_real = np.arctan2(dx, dy) - np.radians(orientation)
     azimuth_real = np.degrees((azimuth_real + np.pi) % (2 * np.pi) - np.pi)
     result_df["Azimuth_Real"] = azimuth_real
+
+    # Calculate the elevation angle
+    elevation_angle = np.arctan2(dz, np.sqrt(dx**2 + dy**2))
+    elevation_angle = np.degrees(elevation_angle)
+    result_df["Elevation_Real"] = elevation_angle
 
     return result_df
 
@@ -114,39 +121,11 @@ def discretize_by_delta(df: pd.DataFrame, dt: int = 0) -> pd.DataFrame:
 
     # Compute mean for each unique (Time_Bucket) group
     discretized_df = df.groupby(["Time_Bucket"], as_index=False).mean(numeric_only=True)
+
+    # Compute std for each unique (Time_Bucket) group
+    discretized_df["Azimuth_Std"] = df.groupby(["Time_Bucket"])["Azimuth"].std().reset_index(drop=True).fillna(0)
+    discretized_df["1stP_Std"] = df.groupby(["Time_Bucket"])["RSSI"].std().reset_index(drop=True).fillna(0)
+
     discretized_df["Timestamp"] = discretized_df["Time_Bucket"] + dt
 
     return discretized_df
-
-
-def prepare_merged_dataframe(dic: dict) -> pd.DataFrame:
-    """
-    Merge multiple DataFrames into a single DataFrame by Time_Bucket.
-
-    Parameters:
-        dic (dict): Dictionary containing multiple DataFrames with Time_Bucket columns
-
-    Returns:
-        pd.DataFrame: Merged DataFrame with prefix added to columns
-    """
-    dfs = []
-    for i, (anchor_id, df) in enumerate(dic.items()):
-
-        df_temp = df.copy().set_index("Time_Bucket")
-        if i == 0:
-            # For the base anchor, keep "X_Real" and "Y_Real" columns unchanged,
-            # and add prefix to the rest of the columns.
-            non_xy = [col for col in df_temp.columns if col not in ["X_Real", "Y_Real"]]
-            df_prefixed = df_temp[non_xy].add_prefix(f"{anchor_id}_")
-            df_temp = pd.concat([df_temp[["X_Real", "Y_Real"]], df_prefixed], axis=1)
-        else:
-            # For other anchors, drop "X_Real" and "Y_Real" (to avoid duplicates),
-            # and add prefix to all remaining columns.
-            df_temp = df_temp.drop(columns=["X_Real", "Y_Real"], errors="ignore")
-            df_temp = df_temp.add_prefix(f"{anchor_id}_")
-        dfs.append(df_temp)
-        
-    # Merge the DataFrames by Time_Bucket
-    merged_df = pd.concat(dfs, axis=1, join="outer")
-    merged_df = merged_df.sort_index()
-    return merged_df

@@ -1,0 +1,50 @@
+delta: 200
+offset: 200
+
+threshold: 10
+
+anchors:
+  rectangular:
+    1:
+      position: [300, 480] # 138
+      orientation: 180
+    2:
+      position: [600, 240]
+      orientation: 270
+    3:
+      position: [300, 0]
+
+      orientation: 0
+    4:
+      position: [0, 240]
+      orientation: 90
+
+  diagonal:
+    1:
+      position: [0, 480, 138] # 138
+      orientation: 135
+    2:
+      position: [600, 480, 138]
+      orientation: 225
+    3:
+      position: [600, 0, 138]
+      orientation: 315
+    4:
+      position: [0, 0, 138]
+      orientation: 45
+
+  '0409':
+    1:
+      position: [270, 450, 138] # 138
+      orientation: 180
+    2:
+      position: [270, 450, 138]
+      orientation: 180
+    3:
+      position: [270, 450, 138]
+      orientation: 180
+
+  '0414':
+    4:
+      position: [270, 450, 138] # 138
+      orientation: 180

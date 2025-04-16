@@ -37,7 +37,7 @@ def aoa_kf(dic: dict, delta: int):
         all_anchors_results[anchor_id] = anchor_results
 
     # Show the results
-    vs.visualize_all_anchors_with_heatmap({anchor_id: results['raw'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth', vmin=0, vmax=15, title="Raw AoA")   
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results['raw'] for anchor_id, results in all_anchors_results.items()}, 'Elevation_Real', 'Elevation', vmin=0, vmax=15, title="Raw AoA")   
     # vs.visualize_all_anchors_with_heatmap({anchor_id: results['maf'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_MAF', vmin=0, vmax=15, title="MAF AoA")
     # vs.visualize_all_anchors_with_heatmap({anchor_id: results['median'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_Median', vmin=0, vmax=15, title="Median AoA")
     # vs.visualize_all_anchors_with_heatmap({anchor_id: results['low_pass'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_LowPass', vmin=0, vmax=15, title="Low Pass AoA")
@@ -48,18 +48,30 @@ def calibration():
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
     # Load files
-    config = yaml.safe_load(open(os.path.join(base_dir, "../config.yml")))
+    config = yaml.safe_load(open(os.path.join(base_dir, "../collected-config.yml")))
+    config['anchors'] = config['anchors']['0414']
     delta = config['delta']
     offset = config['offset']
 
-    gt_path = os.path.join(base_dir, "../dataset/static/gt/gt_static_east.csv")
+    gt_path = os.path.join(base_dir, "../dataset/0414/gt/anchor4-west.csv")
     gt_df = pd.read_csv(gt_path)
 
-    ms_path = os.path.join(base_dir, "../dataset/static/beacons/beacons_static_east.csv")
-    ms_df = pd.read_csv(ms_path)
+    ms_path_1 = os.path.join(base_dir, "../dataset/0414/beacons/anchor4-west.csv")
+    ms_df_1 = pd.read_csv(ms_path_1)
+    # ms_path_2 = os.path.join(base_dir, "../dataset/0414/beacons/rectangular.csv")
+    # ms_df_2 = pd.read_csv(ms_path_2)
+    # ms_path_3 = os.path.join(base_dir, "../dataset/0414/beacons/rectangular.csv")
+    # ms_df_3 = pd.read_csv(ms_path_3)
+    # ms_path_4 = os.path.join(base_dir, "../dataset/0317/anchor4/rectangular.csv")
+    # ms_df_4 = pd.read_csv(ms_path_4)
 
     # Group by anchors
-    anchors_df_dict = { anchor_id: anchor_df for anchor_id, anchor_df in ms_df.groupby("AnchorID") }
+    anchors_df_dict = { 
+        4: ms_df_1,
+        # 2: ms_df_2,
+        # 3: ms_df_3,
+        # 4: ms_df_4,
+    }
 
     # Preprocess the data
     for anchor_id, anchor_df in anchors_df_dict.items():

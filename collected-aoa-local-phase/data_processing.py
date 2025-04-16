@@ -58,7 +58,7 @@ def filter_with_position_ground_truth(gt_df: pd.DataFrame, ms_df: pd.DataFrame, 
     filtered_data = []
 
     for row in gt_df.itertuples(index=False):
-        start_timestamp, end_timestamp, x, y = row
+        s_iso, start_timestamp, e_iso, end_timestamp, x, y, z = row
         
         mask = (ms_df["Timestamp"] >= start_timestamp + offset) & (ms_df["Timestamp"] <= end_timestamp - offset)
         filtered = ms_df.loc[mask].copy()

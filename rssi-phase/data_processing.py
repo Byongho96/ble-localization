@@ -70,6 +70,7 @@ def filter_with_position_ground_truth(gt_df: pd.DataFrame, ms_df: pd.DataFrame, 
         
     return pd.concat(filtered_data, ignore_index=True) if filtered_data else pd.DataFrame()
 
+
 def calculate_rssi_and_distance(df: pd.DataFrame, position: list[float, float, float]) -> pd.DataFrame:
     '''
     Calculate the distance from the position and add it to the DataFrame.
@@ -96,6 +97,27 @@ def calculate_rssi_and_distance(df: pd.DataFrame, position: list[float, float, f
     
     return df.groupby(['X_Real', 'Y_Real'], group_keys=False).apply(filter_group)
 
+def filter_outlier_with_iqr(df: pd.DataFrame, column: str) -> pd.DataFrame:
+    '''
+    Filter outliers using the Interquartile Range (IQR) method.
+
+    Parameters:
+        df (pd.DataFrame): Input DataFrame with ["RSSI"]
+        column (str): Column name to filter outliers
+
+    Returns:
+        pd.DataFrame: DataFrame without outliers
+    '''
+    def iqr_filter(group):
+        q1 = group["RSSI"].quantile(0.25)
+        q3 = group["RSSI"].quantile(0.75)
+        iqr = q3 - q1
+        lower_bound = q1 - 1.5 * iqr
+        upper_bound = q3 + 1.5 * iqr
+        return group[(group["RSSI"] >= lower_bound) & (group["RSSI"] <= upper_bound)]
+
+    cleaned_df = df.groupby(["X_Real", "Y_Real"], group_keys=False).apply(iqr_filter)
+    return cleaned_df.reset_index(drop=True)
 
 def calculate_log_distance_parameters(df: pd.DataFrame) -> pd.DataFrame:
     '''
