@@ -58,7 +58,7 @@ def filter_with_position_ground_truth(gt_df: pd.DataFrame, ms_df: pd.DataFrame, 
     filtered_data = []
 
     for row in gt_df.itertuples(index=False):
-        s_iso, start_timestamp, e_iso, end_timestamp, x, y, z = row
+        start_timestamp, end_timestamp, x, y = row
         
         mask = (ms_df["Timestamp"] >= start_timestamp + offset) & (ms_df["Timestamp"] <= end_timestamp - offset)
         filtered = ms_df.loc[mask].copy()
@@ -105,19 +105,29 @@ def discretize_by_delta(df: pd.DataFrame, dt: int = 0) -> pd.DataFrame:
         pd.DataFrame: Discretized DataFrame averaged by time bucket. ['Time_Bucket'] column is added.
     """
     if not dt:
-        return df
+        return df.copy()
 
     df = df.copy()
-
-    # Create time buckets by discretizing the Timestamp column in dt intervals
     df["Time_Bucket"] = (df["Timestamp"] // dt) * dt
 
-    # Compute mean for each unique (Time_Bucket) group
-    discretized_df = df.groupby(["Time_Bucket"], as_index=False).mean(numeric_only=True)
+    # 1) 평균
+    mean_df = (
+        df.groupby("Time_Bucket", as_index=False)
+          .mean(numeric_only=True)
+    )
+
+    # 2) Azimuth 분산
+    var_df = (
+        df.groupby("Time_Bucket")["Azimuth"]
+          .var()
+          .reset_index(name="Azimuth_Var")
+    )
+
+    # 3) 합치고 Timestamp 갱신
+    discretized_df = mean_df.merge(var_df, on="Time_Bucket")
     discretized_df["Timestamp"] = discretized_df["Time_Bucket"] + dt
 
     return discretized_df
-
 
 def prepare_merged_dataframe(dic: dict) -> pd.DataFrame:
     """

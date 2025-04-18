@@ -48,3 +48,17 @@ anchors:
     4:
       position: [270, 450, 138] # 138
       orientation: 180
+
+  '0416':
+    1:
+      position: [315, 630, 140] # 140
+      orientation: 180
+    2:
+      position: [630, 315, 140]
+      orientation: 270
+    3:
+      position: [315, 0, 140]
+      orientation: 0
+    4:
+      position: [0, 315, 140]
+      orientation: 90

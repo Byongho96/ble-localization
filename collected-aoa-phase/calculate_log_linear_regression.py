@@ -16,10 +16,10 @@ def fit_piecewise_log_linear(x, y, threshold):
     x2, y2 = x[mask_right], y[mask_right]
 
     # 2. 왼쪽 로그 피팅
-    def log_func(x, a, b):
-        return a * np.log(x + 1) + b
+    def power_func(x, a, b):
+        return a * x ** 0.5 + b
 
-    popt1, _ = curve_fit(log_func, x1, y1, maxfev=10000)
+    popt1, _ = curve_fit(power_func, x1, y1, maxfev=10000)
 
     # 3. 오른쪽 선형 피팅
     def linear_func(x, c, d):
@@ -29,7 +29,7 @@ def fit_piecewise_log_linear(x, y, threshold):
 
     # 4. 전체 예측
     y_pred = np.empty_like(x)
-    y_pred[mask_left] = log_func(x1, *popt1)
+    y_pred[mask_left] = power_func(x1, *popt1)
     y_pred[mask_right] = linear_func(x2, *popt2)
 
     # 5. 성능 평가
@@ -56,8 +56,7 @@ def search_best_piecewise_log_linear(x, y, thresholds):
             if result["mse"] < best_mse:
                 best_mse = result["mse"]
                 best_result = result
-        except Exception as e:
-            print(f"❌ threshold {threshold}: {e}")
+        except Exception:
             continue
 
     return best_result
@@ -65,18 +64,23 @@ def search_best_piecewise_log_linear(x, y, thresholds):
 
 def plot_piecewise_result(x, y, result):
     threshold = result["threshold"]
+    
+    # x 기준 정렬
+    sort_idx = np.argsort(x)
+    x_sorted = x[sort_idx]
+    y_pred_sorted = result["y_pred"][sort_idx]
+
     plt.figure(figsize=(10, 5))
-    plt.scatter(x, y, alpha=0.3, label="Data")
-    plt.plot(x, result["y_pred"], color="red", label="Piecewise Log-Linear Fit")
+    plt.scatter(x, y, alpha=0.01, label="Data")
+    plt.plot(x_sorted, y_pred_sorted, color="red", label="Best Fit")  # 정렬된 선 그래프
     plt.axvline(threshold, linestyle="--", color="gray", label=f"Threshold = {threshold}")
     plt.xlabel("Azimuth_Var")
     plt.ylabel("Error_Mean")
-    plt.title("Piecewise Log-Linear Fit")
+    plt.title("Best Piecewise Power-Linear Fit")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
     plt.show()
-
 
 window_size = 20
 
@@ -109,14 +113,17 @@ if __name__ == "__main__":
     ms_gt_df["Azimuth_Var"] = ms_gt_df["Azimuth"].rolling(window=window_size).var()
     ms_gt_df["Error_Mean"] = ms_gt_df["Azimuth_Error_Abs"].rolling(window=window_size).mean()
 
+    # Nan 제거
+    ms_gt_df = ms_gt_df.dropna(subset=["Azimuth_Var", "Azimuth_Error_Abs", "Error_Mean"])
+
     # Filter 
-    ms_gt_df = ms_gt_df[ms_gt_df["Azimuth_Var"] <= 1500].copy()
+    # ms_gt_df = ms_gt_df[ms_gt_df["Azimuth_Var"] <= 100].copy()
 
     x = ms_gt_df["Azimuth_Var"].values
     y = ms_gt_df["Error_Mean"].values
 
     # 2. threshold 후보 설정
-    threshold_candidates = np.arange(0, 500, 5)
+    threshold_candidates = np.arange(30, 1500, 5)
 
     # 3. 최적 피팅 수행
     best_result = search_best_piecewise_log_linear(x, y, threshold_candidates)

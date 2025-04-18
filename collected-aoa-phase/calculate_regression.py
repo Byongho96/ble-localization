@@ -39,7 +39,11 @@ def calculate_exponential_fit():
     ms_gt_df["Error_Mean"] = ms_gt_df["Azimuth_Error_Abs"].rolling(window=window_size).mean()
 
     # Filter 
-    ms_gt_df = ms_gt_df[ms_gt_df["Azimuth_Var"] <= 1500].copy()
+    ms_gt_df = ms_gt_df[ms_gt_df["Azimuth_Var"] <= 400].copy()
+
+    
+    # Drop rows with NaNs from rolling
+    ms_gt_df = ms_gt_df.dropna(subset=["Azimuth_Var", "Azimuth_Error_Abs", "Error_Mean"])
 
     x = ms_gt_df["Azimuth_Var"].values
     y = ms_gt_df["Error_Mean"].values
@@ -104,18 +108,18 @@ Log
 """
 Root
 """
-# ✅ Root 함수 정의
-def root_func(x, a, b):
-    return a * np.sqrt(x) + b
+# # ✅ Root 함수 정의
+# def root_func(x, a, b):
+#     return a * np.sqrt(x) + b
 
-# ✅ 피팅
-popt, _ = curve_fit(root_func, x, y, maxfev=10000)
-a, b = popt
+# # ✅ 피팅
+# popt, _ = curve_fit(root_func, x, y, maxfev=10000)
+# a, b = popt
 
-# ✅ 예측 및 평가
-y_pred = root_func(x, *popt)
-mse = mean_squared_error(y, y_pred)
-r2 = r2_score(y, y_pred)
+# # ✅ 예측 및 평가
+# y_pred = root_func(x, *popt)
+# mse = mean_squared_error(y, y_pred)
+# r2 = r2_score(y, y_pred)
 
 if __name__ == "__main__":
     calculate_exponential_fit()
