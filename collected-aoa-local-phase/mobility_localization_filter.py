@@ -89,11 +89,10 @@ def weighted_least_squares_triangulation(df: pd.DataFrame, config: dict, anchor_
         pd.DataFrame: ["Time_Bucket","X_Real","Y_Real","X_LS","Y_LS"]
     """
     est = []
-
-    cnt =0
+    cnt = 0
 
     for time_bucket, row in df.iterrows():
-        H, C, W_list = [], [], []
+        A, b, W_list = [], [], []
         valid = 0
 
         for anchor in anchor_ids:
@@ -102,20 +101,20 @@ def weighted_least_squares_triangulation(df: pd.DataFrame, config: dict, anchor_
             if pd.isna(az) or pd.isna(var):
                 continue
 
-            pos = config["anchors"][anchor]["position"]
+            pos = np.array(config["anchors"][anchor]["position"][:2])  # 2D position
             ori = config["anchors"][anchor]["orientation"]
-            # AoA 라디안 변환
-            aoa_rad = math.radians(90 - az - ori)
+            theta = math.radians(90 - az - ori)
 
-            # H, C 항 추가
-            H.append([-math.tan(aoa_rad), 1.0])
-            C.append([pos[1] - pos[0] * math.tan(aoa_rad)])
+            d = np.array([math.cos(theta), math.sin(theta)])
+            P = np.eye(2) - np.outer(d, d)
 
-            # 오차 모델 & 가중치
+            A.append(P)
+            b.append(P @ pos.reshape(-1, 1))
+
+            # 가중치 계산 (오차의 역제곱)
             error = aoa_error_model(var)
-
             w = 1.0 / (error ** 2) if error > 0 else 0.0
-            W_list.append(w)
+            W_list.extend([w, w])  # 2D에서 각 P는 2행이므로 w를 2번
 
             valid += 1
 
@@ -123,18 +122,16 @@ def weighted_least_squares_triangulation(df: pd.DataFrame, config: dict, anchor_
             continue
 
         cnt += 1
-
-        H = np.array(H)        # shape (valid, 2)
-        C = np.array(C)        # shape (valid, 1)
-        W = np.diag(W_list)    # shape (valid, valid)
+        A = np.vstack(A)  # shape (2n, 2)
+        b = np.vstack(b)  # shape (2n, 1)
+        W = np.diag(W_list)  # shape (2n, 2n)
 
         try:
-            # Weighted least squares
-            e = np.linalg.inv(H.T @ W @ H) @ (H.T @ W @ C)
+            x = np.linalg.inv(A.T @ W @ A) @ (A.T @ W @ b)
         except np.linalg.LinAlgError:
             continue
 
-        x_ls, y_ls = float(e[0]), float(e[1])
+        x_ls, y_ls = float(x[0]), float(x[1])
         est.append([
             time_bucket,
             row["X_Real"],
@@ -144,8 +141,7 @@ def weighted_least_squares_triangulation(df: pd.DataFrame, config: dict, anchor_
         ])
 
     print(cnt)
-
-    return pd.DataFrame(est, columns=["Time_Bucket","X_Real","Y_Real","X_WLS","Y_WLS"])
+    return pd.DataFrame(est, columns=["Time_Bucket", "X_Real", "Y_Real", "X_WLS", "Y_WLS"])
 
 def local_2D_kalman_filter(df: pd.DataFrame, dt: int = 20) -> pd.DataFrame:
     '''
@@ -646,21 +642,23 @@ def local_weighted_unscented_kalman_filter(df: pd.DataFrame, config: dict, ancho
     """
     dt /= 1000  # ms → s
 
-    # State transition (constant velocity)
+    # State transition (constant velocity along heading)
     def fx(x, dt):
-        F = np.array([[1,0,dt,0],
-                      [0,1,0,dt],
-                      [0,0,1,0],
-                      [0,0,0,1]])
-        return F @ x
+        x_new = x.copy()
+        v = x[2]
+        theta = x[3]
+        x_new[0] += v * np.cos(theta) * dt
+        x_new[1] += v * np.sin(theta) * dt
+        # v, theta remain unchanged
+        return x_new
 
     points = MerweScaledSigmaPoints(n=4, alpha=0.1, beta=2, kappa=0)
     ukf = UnscentedKalmanFilter(dim_x=4, dim_z=1, dt=dt, fx=fx, hx=None, points=points)
 
-    # init
-    ukf.x = np.array([0,0,0,0])
-    ukf.P = np.eye(4)*500
-    ukf.Q = np.diag([10**2,10**2,1**2,1**2])
+    # init state: [x, y, v, theta]
+    ukf.x = np.array([0, 0, 0.1, 0.0])  # small initial velocity
+    ukf.P = np.eye(4) * 500
+    ukf.Q = np.diag([10**2, 10**2, 1.0, np.radians(5)**2])
 
     est = []
     count = 0
@@ -676,7 +674,7 @@ def local_weighted_unscented_kalman_filter(df: pd.DataFrame, config: dict, ancho
             vars_.append(var)
             poses.append(config["anchors"][aid]["position"])
             oris.append(config["anchors"][aid]["orientation"])
-            
+
         if len(meas) < LEAST_ANCHORS:
             continue
 
@@ -684,26 +682,23 @@ def local_weighted_unscented_kalman_filter(df: pd.DataFrame, config: dict, ancho
         poses = np.array(poses)
         oris_rad = np.deg2rad(oris)
 
-        # 예측함수
+        # Measurement model
         def hx(x):
             pos = x[:2]
             angs = []
             for (ax, ay, _), ori in zip(poses, oris_rad):
-                a = np.arctan2(pos[0]-ax, pos[1]-ay) - ori
-                angs.append(np.degrees((a+np.pi)%(2*np.pi)-np.pi))
+                a = np.arctan2(pos[0] - ax, pos[1] - ay) - ori
+                angs.append(np.degrees((a + np.pi) % (2 * np.pi) - np.pi))
             return np.array(angs)
 
-        # Azimuth_Var → 에러 모델 → R diagonal
-        # errs = 1.3259 * (np.array(vars_) ** 0.4069)
-        # errs = 0.8490 * (np.array(vars_) ** 0.5 + 0.2458
-
+        # Azimuth_Var → error std (in degrees)
         vars_arr = np.array(vars_)
-        errs = aoa_np_error_model(vars_arr)  # 이 값은 degrees 단위 오차 (표준편차)
-        R_diag = errs**1.1 # 왜 낮춰야 하지?
+        errs = aoa_np_error_model(vars_arr)
+        R_diag = errs ** 2
 
-        ukf.hx     = hx
-        ukf.dim_z  = len(meas)
-        ukf.R      = np.diag(R_diag)
+        ukf.hx = hx
+        ukf.dim_z = len(meas)
+        ukf.R = np.diag(R_diag)
 
         ukf.predict()
         ukf.update(meas)
@@ -713,7 +708,8 @@ def local_weighted_unscented_kalman_filter(df: pd.DataFrame, config: dict, ancho
         if count > threshold:
             est.append([tb, row["X_Real"], row["Y_Real"], x_u, y_u])
 
-    return pd.DataFrame(est, columns=["Time_Bucket","X_Real","Y_Real","X_WUKF","Y_WUKF"])
+    return pd.DataFrame(est, columns=["Time_Bucket", "X_Real", "Y_Real", "X_WUKF", "Y_WUKF"])
+
 
 
 def local_particle_filter(df: pd.DataFrame, config: dict, anchor_ids: list, dt: int = 20, threshold: int = 5) -> pd.DataFrame:
