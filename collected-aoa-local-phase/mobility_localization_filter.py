@@ -6,6 +6,14 @@ from ParticleFilter import ParticleFilter
 
 LEAST_ANCHORS = 2
 
+def aoa_np_error_model(vars_arr: np.ndarray) -> np.ndarray:
+    return np.where(vars_arr < 400,
+                      0.8514 * vars_arr ** 0.5 + 0.2294,
+                      0.0102 * vars_arr + 18.0772)
+
+def aoa_error_model(vars_arr: float) -> float:
+    return 0.8514 * vars_arr ** 0.5 + 0.2294 if vars_arr < 400 else 0.0102 * vars_arr + 18.0772
+
 def least_squares_triangulation(df: pd.DataFrame, config: dict, anchor_ids: list) -> pd.DataFrame:
     """
     Least Squares Triangulation
@@ -19,48 +27,57 @@ def least_squares_triangulation(df: pd.DataFrame, config: dict, anchor_ids: list
         pd.DataFrame: DataFrame with new ["Time_Bucket", "X_Real", "Y_Real", "X_LS", "Y_LS"] columns
     """
     estimated_positions = []
+    cnt = 0 
 
-    cnt = 0
-    
     for time_bucket, row in df.iterrows():
-        H = []
-        C = []
+        A = []  # coefficient matrix for least squares
+        b = []  # target vector for least squares
         valid_anchor_count = 0
-        
+
         for anchor in anchor_ids:
-            azimuth = row[f"{anchor}_Azimuth"]
-            
-            # skip if azimuth is missing (NaN)
+            azimuth = row.get(f"{anchor}_Azimuth")
+
+            # Skip this anchor if no AoA value is available
             if pd.isna(azimuth):
-                continue  
+                continue
 
-            pos = config["anchors"][anchor]["position"]
+            # Get anchor position and orientation
+            pos = np.array(config["anchors"][anchor]["position"][:2]) 
             orientation = config["anchors"][anchor]["orientation"]
+            theta = math.radians(90 - azimuth - orientation)
 
-            aoa_rad = math.radians(90 - azimuth - orientation)
-            H.append([-math.tan(aoa_rad), 1])
-            C.append([pos[1] - pos[0] * math.tan(aoa_rad)])
+            # Direction vector pointing from anchor in AoA direction
+            d = np.array([math.cos(theta), math.sin(theta)])
+
+            # Orthogonal projection matrix to the direction vector
+            # This removes the component along the direction d
+            P = np.eye(2) - np.outer(d, d)
+
+            # Project the anchor position onto the plane orthogonal to the direction vector
+            A.append(P)
+            b.append(P @ pos.reshape(-1, 1))
             valid_anchor_count += 1
-        
-        # skip if fewer than 2 valid anchors
+
         if valid_anchor_count < LEAST_ANCHORS:
-            continue  
-        cnt += 1
-        H = np.array(H)
-        C = np.array(C)
-        
+            continue
+
+        A = np.vstack(A)  # shape (2n, 2)
+        b = np.vstack(b)  # shape (2n, 1)
+
         try:
-            e = np.linalg.inv(H.T @ H) @ H.T @ C
+            # Solve least squares problem: minimize ||Ax - b||
+            x, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
         except np.linalg.LinAlgError:
             continue
-        
-        x_LS, y_LS = e[0][0], e[1][0]
+
+        x_LS, y_LS = x.flatten()
         x_real = row["X_Real"]
         y_real = row["Y_Real"]
-        estimated_positions.append([time_bucket, x_real, y_real, x_LS, y_LS])
-    
-    print(cnt)
 
+        estimated_positions.append([time_bucket, x_real, y_real, x_LS, y_LS])
+        cnt += 1
+
+    print(cnt)
     return pd.DataFrame(estimated_positions, columns=["Time_Bucket", "X_Real", "Y_Real", "X_LS", "Y_LS"])
 
 def weighted_least_squares_triangulation(df: pd.DataFrame, config: dict, anchor_ids: list) -> pd.DataFrame:
@@ -95,9 +112,7 @@ def weighted_least_squares_triangulation(df: pd.DataFrame, config: dict, anchor_
             C.append([pos[1] - pos[0] * math.tan(aoa_rad)])
 
             # 오차 모델 & 가중치
-            # error = 1.3259 * (var ** 0.4069)
-            # error = 0.8490 * var ** 0.5 + 0.2458
-            error = 0.8514 * var ** 0.5 + 0.2294 if var < 400 else 0.0102 * var + 18.0772
+            error = aoa_error_model(var)
 
             w = 1.0 / (error ** 2) if error > 0 else 0.0
             W_list.append(w)
@@ -137,7 +152,7 @@ def local_2D_kalman_filter(df: pd.DataFrame, dt: int = 20) -> pd.DataFrame:
     Localization 2D Kalman Filter
 
     Parameters:
-        df (pd.DataFrame): Input DataFrame with ["X_LS", "Y_LS"]
+        df (pd.DataFrame): Input DataFrame with ["X_WLS", "Y_WLS"]
 
     Returns:
         pd.DataFrame: DataFrame with new ["X_2D_KF", "Y_2D_KF"] column
@@ -147,7 +162,7 @@ def local_2D_kalman_filter(df: pd.DataFrame, dt: int = 20) -> pd.DataFrame:
     kf = KalmanFilter(dim_x=4, dim_z=2)
 
     # Initial state: [x, y, vx, vy]
-    kf.x = np.array([df.iloc[0]["X_LS"], df.iloc[0]["Y_LS"],
+    kf.x = np.array([df.iloc[0]["X_WLS"], df.iloc[0]["Y_WLS"],
                      0.0, 0.0])
 
     # State Transition Matrix
@@ -163,17 +178,17 @@ def local_2D_kalman_filter(df: pd.DataFrame, dt: int = 20) -> pd.DataFrame:
         [0, 1, 0, 0]])
     
     """
-    Mean Error : 107 -> 75
-    Mean Std : 87 -> 62
+    Mean Error : 78 -> 55
+    Mean Std : 66 -> 46
     """
     # Initial Covariance Matrix
-    kf.P = np.diag([75, 75, 1, 1])
+    kf.P = np.diag([55 ** 2, 55 ** 2, 1, 1])
     
     # Process Noise Covariance
-    kf.Q = np.diag([19, 19, 7, 7])
+    kf.Q = np.diag([10 ** 2, 10 ** 2, 1, 1])
 
     # Measurement Noise Covariance
-    kf.R = np.diag([62**2, 62**2])  
+    kf.R = np.diag([46 ** 2, 46 ** 2])  
 
     filtered_positions = []
 
@@ -183,7 +198,7 @@ def local_2D_kalman_filter(df: pd.DataFrame, dt: int = 20) -> pd.DataFrame:
         kf.predict()
 
         # Update step
-        z = np.array([float(row["X_LS"]), float(row["Y_LS"])])
+        z = np.array([float(row["X_WLS"]), float(row["Y_WLS"])])
         kf.update(z)
 
         # Save the filtered position
@@ -274,14 +289,13 @@ def local_extended_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: lis
 
         measured_aoa = np.array(measured_aoa)
         anchors_position_np = np.array(valid_positions)
-        print(f"anchors_position_np: {anchors_position_np}")
         anchors_orientation_rad = np.deg2rad(valid_orientations)
 
         # Measurement function (variable-length)
         def hx(x):
             pos = x[:2]
             predicted_angles = []
-            for (ax, ay), a_ori_rad in zip(anchors_position_np, anchors_orientation_rad):
+            for (ax, ay, az), a_ori_rad in zip(anchors_position_np, anchors_orientation_rad):
                 angle = np.arctan2(pos[0] - ax, pos[1] - ay) - a_ori_rad
                 angle = (angle + np.pi) % (2 * np.pi) - np.pi
                 predicted_angles.append(np.degrees(angle))
@@ -290,7 +304,7 @@ def local_extended_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: lis
         # Jacobian of the measurement function
         def HJacobian(x):
             H = np.zeros((len(anchors_position_np), 4))
-            for i, (ax, ay) in enumerate(anchors_position_np):
+            for i, (ax, ay, az) in enumerate(anchors_position_np):
                 dx = x[0] - ax
                 dy = x[1] - ay
                 denom = dx**2 + dy**2
@@ -303,7 +317,18 @@ def local_extended_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: lis
             return H
 
         # Measurement noise (adjusted dynamically)
-        ekf.R = np.eye(len(measured_aoa)) * (6.0 ** 2)
+        # 측정값에 대한 오차 가중치 계산
+        az_vars = np.array([row.get(f"{aid}_Azimuth_Var", np.nan) for aid in anchor_ids])
+        az_vars = az_vars[~np.isnan(az_vars)]  # 유효한 분산만 추림
+
+        if len(az_vars) != len(measured_aoa):
+            continue  # 가중치와 측정값 개수가 맞지 않으면 스킵
+
+        # 모델 기반으로 각도 오차 표준편차 계산
+        az_std_devs = aoa_np_error_model(az_vars)  # 이 값은 degrees 단위 오차 (표준편차)
+
+        # 공분산 행렬 R 설정 (각 측정값에 따른 오차 제곱)
+        ekf.R = np.diag(az_std_devs ** 2)
 
         # Predict and update
         ekf.predict()
@@ -651,6 +676,7 @@ def local_weighted_unscented_kalman_filter(df: pd.DataFrame, config: dict, ancho
             vars_.append(var)
             poses.append(config["anchors"][aid]["position"])
             oris.append(config["anchors"][aid]["orientation"])
+            
         if len(meas) < LEAST_ANCHORS:
             continue
 
@@ -672,11 +698,7 @@ def local_weighted_unscented_kalman_filter(df: pd.DataFrame, config: dict, ancho
         # errs = 0.8490 * (np.array(vars_) ** 0.5 + 0.2458
 
         vars_arr = np.array(vars_)
-        errs = np.where(
-            vars_arr < 400,
-            0.8514 * vars_arr ** 0.5 + 0.2294,
-            0.0102 * vars_arr + 18.0772
-        )
+        errs = aoa_np_error_model(vars_arr)  # 이 값은 degrees 단위 오차 (표준편차)
         R_diag = errs**1.1 # 왜 낮춰야 하지?
 
         ukf.hx     = hx
@@ -710,41 +732,40 @@ def local_particle_filter(df: pd.DataFrame, config: dict, anchor_ids: list, dt: 
     """
     print("Start the Particle Filter Process")
 
-    dt /= 1000  # Convert ms to seconds
-
-    # Initialize Particle Filter
+    dt /= 1000
     pf = ParticleFilter(num_particles=1000, state_bounds=(0, 1200, 0, 600), angle_noise_std=6., dt=dt)
-
     pos_noise_std = 10.0
     vel_noise_std = 1.0
-
     pf.initialize_particles()
 
     estimated_positions = []
     th = 0
 
-    # Run the Particle Filter
     for time_bucket, row in df.iterrows():
         measured_aoa = []
         valid_positions = []
         valid_orientations = []
+        aoa_vars = []
 
         for aid in anchor_ids:
             az = row.get(f"{aid}_Azimuth", np.nan)
-            if not pd.isna(az):
+            az_var = row.get(f"{aid}_Azimuth_Var", np.nan)
+            if not pd.isna(az) and not pd.isna(az_var):
                 measured_aoa.append(az)
                 valid_positions.append(config["anchors"][aid]["position"])
                 valid_orientations.append(config["anchors"][aid]["orientation"])
+                aoa_vars.append(az_var)
 
         if len(measured_aoa) < LEAST_ANCHORS:
-            continue  # Require at least 2 valid anchors
+            continue
 
         measured_aoa = np.array(measured_aoa)
         anchors_position_np = np.array(valid_positions)
         anchors_orientation_np = np.array(valid_orientations)
+        aoa_vars = np.array(aoa_vars)
 
         pf.predict(pos_noise_std, vel_noise_std)
-        pf.update(measured_aoa, anchors_position_np, anchors_orientation_np)
+        pf.update(measured_aoa, anchors_position_np, anchors_orientation_np, aoa_vars)
         x_pf, y_pf = pf.estimate()
 
         th += 1
