@@ -38,38 +38,41 @@ class ParticleFilter:
         self.last_estimated_state = None
         
     def update(self, measured_aoa: np.ndarray, anchors_position: np.ndarray,
-               anchors_orientation: np.ndarray) -> None:
+               anchors_orientation: np.ndarray, aoa_errors:np.ndarray) -> None:
         """
         Update the particle filter based on the measured AoA.
         """
-        self.weights = self.compute_weights(measured_aoa, anchors_position, anchors_orientation)
+        self.weights = self.compute_weights(measured_aoa, anchors_position, anchors_orientation, aoa_errors)
         self.weights += 1.e-300  # Avoid division by zero
         self.weights /= np.sum(self.weights)
         self.resample()
 
     def compute_weights(self, measured_aoa: np.ndarray, anchors_positions: np.ndarray,
-                        anchors_orientations: np.ndarray) -> np.ndarray:
+                        anchors_orientations: np.ndarray, aoa_errors: np.ndarray) -> np.ndarray:
         """
-        Compute the weight of a particle based on the measured AoA.
+        Compute the weight of a particle based on the measured AoA and error per anchor.
         """
         anchors_orientations_rad = np.deg2rad(anchors_orientations)
 
-        # particles: (N, 2), anchors_positions: (M, 2)
         dx = self.particles[:, 0][:, np.newaxis] - anchors_positions[:, 0]
         dy = self.particles[:, 1][:, np.newaxis] - anchors_positions[:, 1]
 
-        # Compute the angle between the particle and the anchor
+        # angle between particle and anchor (N, M)
         particle_angles = np.arctan2(dx, dy) - anchors_orientations_rad[np.newaxis, :]
         particle_angles = (particle_angles + np.pi) % (2 * np.pi) - np.pi
         particle_angles = np.rad2deg(particle_angles)
 
-        # Compute the difference between the measured AoA and the particle's angle
+        # (N, M) error between measured and expected
         errors = np.abs(measured_aoa - particle_angles)
 
-        weights = np.prod(np.exp(-0.5 * (errors / self.angle_noise_std) ** 2), axis=1)
+        # 가우시안 기반 가중치 계산, 각 anchor에 따라 분산 다름
+        stds = aoa_errors[np.newaxis, :]  # shape (1, M)
+        likelihoods = np.exp(-0.5 * (errors / stds) ** 2) / (stds * np.sqrt(2 * np.pi))
+        
+        # 전체 weight는 모든 anchor likelihood의 곱
+        weights = np.prod(likelihoods, axis=1)
 
         return weights
-
     def resample(self) -> None:
         """
         Resample particles based on the weights.

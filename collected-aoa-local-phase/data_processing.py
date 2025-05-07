@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-
+from scipy.stats import zscore
 def interpolate_ground_truth(gt_df: pd.DataFrame, dt: int) -> pd.DataFrame:
     """
     Interpolates ground truth (gt_df) at fixed dt intervals.
@@ -38,10 +38,13 @@ def interpolate_ground_truth(gt_df: pd.DataFrame, dt: int) -> pd.DataFrame:
     new_y = np.interp(new_timestamps, times, y_vals)
 
     return pd.DataFrame({
+        'StartTimeISO': pd.to_datetime(new_timestamps, unit='ms').astype(str),
         'StartTimestamp': new_timestamps,
+        'EndTimeISO': pd.to_datetime(new_timestamps + dt, unit='ms').astype(str),
         'EndTimestamp': new_timestamps + dt,
         'X': new_x,
-        'Y': new_y
+        'Y': new_y,
+        'Z': 140
     })
 
 def filter_with_position_ground_truth(gt_df: pd.DataFrame, ms_df: pd.DataFrame, offset: int = 0) -> pd.DataFrame:
@@ -58,8 +61,7 @@ def filter_with_position_ground_truth(gt_df: pd.DataFrame, ms_df: pd.DataFrame, 
     filtered_data = []
 
     for row in gt_df.itertuples(index=False):
-        start_timestamp, end_timestamp, x, y = row
-        
+        start_iso, start_timestamp, end_iso, end_timestamp, x, y, z = row
         mask = (ms_df["Timestamp"] >= start_timestamp + offset) & (ms_df["Timestamp"] <= end_timestamp - offset)
         filtered = ms_df.loc[mask].copy()
         filtered["X_Real"] = x
@@ -108,7 +110,8 @@ def discretize_by_delta(df: pd.DataFrame, dt: int = 0) -> pd.DataFrame:
         return df.copy()
 
     df = df.copy()
-    df["Time_Bucket"] = (df["Timestamp"] // dt) * dt
+    min_ts = df["Timestamp"].min()
+    df["Time_Bucket"] = ((df["Timestamp"] - min_ts) // dt).astype(int)
 
     # 1) 평균
     mean_df = (
@@ -123,11 +126,109 @@ def discretize_by_delta(df: pd.DataFrame, dt: int = 0) -> pd.DataFrame:
           .reset_index(name="Azimuth_Var")
     )
 
+    # 3) RSSI 분산
+    var_df["RSSI_Var"] = (
+        df.groupby("Time_Bucket")["RSSI"]
+          .var()
+          .reset_index(name="RSSI_Var")["RSSI_Var"]
+    )
+
     # 3) 합치고 Timestamp 갱신
     discretized_df = mean_df.merge(var_df, on="Time_Bucket")
     discretized_df["Timestamp"] = discretized_df["Time_Bucket"] + dt
 
     return discretized_df
+
+def sliding_window_average(df: pd.DataFrame, dt: int = 200, stride: int = 500) -> pd.DataFrame:
+    """
+    Apply sliding window with z-score-based outlier removal and compute stats.
+
+    Parameters:
+        df (pd.DataFrame): Must include ['Timestamp', 'Azimuth', 'Azimuth_Real', 'RSSI']
+        dt (int): Window size in milliseconds
+        stride (int): Step size in milliseconds
+
+    Returns:
+        pd.DataFrame: Aggregated statistics per sliding window
+    """
+    df = df.copy()
+    df.sort_values("Timestamp", inplace=True)
+    df.reset_index(drop=True, inplace=True)
+
+    rows = []
+    cnt = 0
+
+    for i in range(len(df)):
+        now = df.loc[i, "Timestamp"]
+        window = df[(df["Timestamp"] >= now - dt) & (df["Timestamp"] <= now)]
+
+        if len(window) >= 3:
+            z = zscore(window[["Azimuth"]], nan_policy='omit')
+            mask = (np.abs(z) < 3).all(axis=1)
+            filtered = window[mask]
+
+            if not filtered.empty:
+                rows.append({
+                    "Time_Bucket": cnt,
+                    "Timestamp": now,
+                    "Azimuth": filtered["Azimuth"].mean(),
+                    "Azimuth_Var": filtered["Azimuth"].var(ddof=1),
+                    "X_Real": filtered["X_Real"].mean(),
+                    "Y_Real": filtered["Y_Real"].mean(),
+                    "RSSI": filtered["RSSI"].mean(),
+                    "RSSI_Var": filtered["RSSI"].var(ddof=1),
+                })
+                cnt += 1
+
+    return pd.DataFrame(rows)
+
+def lowpass_filter(df: pd.DataFrame, alpha: float = 0.3) -> pd.DataFrame:
+    """
+    Apply a low-pass filter (exponential moving average) to Azimuth and RSSI.
+
+    Parameters:
+        df (pd.DataFrame): Must include ['Timestamp', 'Azimuth', 'Azimuth_Real', 'RSSI', 'X_Real', 'Y_Real']
+        alpha (float): Smoothing factor between 0 and 1
+
+    Returns:
+        pd.DataFrame: Filtered stats per row with Time_Bucket
+    """
+    df = df.copy()
+    df.sort_values("Timestamp", inplace=True)
+    df.reset_index(drop=True, inplace=True)
+
+    rows = []
+    cnt = 0
+
+    azimuth_ema = None
+    rssi_ema = None
+
+    for i in range(len(df)):
+        now = df.loc[i, "Timestamp"]
+        az = df.loc[i, "Azimuth"]
+        rssi = df.loc[i, "RSSI"]
+
+        # EMA 초기화
+        if azimuth_ema is None:
+            azimuth_ema = az
+            rssi_ema = rssi
+        else:
+            azimuth_ema = alpha * az + (1 - alpha) * azimuth_ema
+            rssi_ema = alpha * rssi + (1 - alpha) * rssi_ema
+
+        rows.append({
+            "Time_Bucket": cnt,
+            "Timestamp": now,
+            "Azimuth": azimuth_ema,
+            "Azimuth_Var": np.nan,  # EMA는 분산 없음
+            "X_Real": df.loc[i, "X_Real"],
+            "Y_Real": df.loc[i, "Y_Real"],
+            "RSSI": rssi_ema,
+            "RSSI_Var": np.nan,
+        })
+        cnt += 1
+
+    return pd.DataFrame(rows)
 
 def prepare_merged_dataframe(dic: dict) -> pd.DataFrame:
     """

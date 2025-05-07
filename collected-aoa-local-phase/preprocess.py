@@ -20,7 +20,7 @@ def gt():
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
     # Read the input CSV file
-    input_path = os.path.join(base_dir, "../dataset/0416/gt/rectangular-edge-1.csv")
+    input_path = os.path.join(base_dir, "../dataset/0421/gt/set-3.csv")
     df = pd.read_csv(input_path)
 
     # Compute new timestamp columns
@@ -31,7 +31,7 @@ def gt():
     df = df[["StartTimeISO", "StartTimestamp", "EndTimeISO", "EndTimestamp", "X", "Y", "Z"]]
 
     # Write the transformed DataFrame to the output CSV file
-    output_path = os.path.join(base_dir, "../dataset/0416/gt/rectangular-edge.csv")
+    output_path = os.path.join(base_dir, "../dataset/0421/gt/set-3-3.csv")
     df.to_csv(output_path, index=False)
 
 def beacons():
@@ -44,8 +44,8 @@ def beacons():
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
     # Read the input CSV file
-    input_path = os.path.join(base_dir, "../dataset/0416/beacons/rectangular-edge/anchor4-1.csv")
-    output_path = os.path.join(base_dir, "../dataset/0416/beacons/rectangular-edge/anchor4.csv")
+    input_path = os.path.join(base_dir, "../dataset/0421/beacons/anchor4/diagonal-low-p.csv")
+    output_path = os.path.join(base_dir, "../dataset/0421/beacons/anchor4/diagonal-low.csv")
 
     with open(input_path, mode='r', encoding='utf-8') as infile, \
         open(output_path, mode='w', encoding='utf-8', newline='') as outfile:
@@ -75,5 +75,5 @@ def beacons():
             writer.writerow([timestamp, tag, rssi, azimuth, elevation, channel, anchor, sequence])
 
 if __name__ =="__main__": 
-    # gt()
-    beacons()
+    gt()
+    # beacons()

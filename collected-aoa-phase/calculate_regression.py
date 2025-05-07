@@ -14,16 +14,16 @@ def calculate_exponential_fit():
 
     # Load config
     config = yaml.safe_load(open(os.path.join(base_dir, "../collected-config.yml")))
-    config['anchors'] = config['anchors']['0409']
+    config['anchors'] = config['anchors']['0421']
     delta = config['delta']
     offset = config['offset']
 
     anchor_id = 1
 
-    gt_path = os.path.join(base_dir, "../dataset/0409/gt/anchor3.csv")
+    gt_path = os.path.join(base_dir, "../dataset/0421/gt/grid.csv")
     gt_df = pd.read_csv(gt_path)
 
-    ms_path = os.path.join(base_dir, "../dataset/0409/beacons/anchor3.csv")
+    ms_path = os.path.join(base_dir, "../dataset/0421/beacons/anchor1/diagonal-grid.csv")
     ms_df = pd.read_csv(ms_path)
 
     # Preprocess
@@ -34,12 +34,12 @@ def calculate_exponential_fit():
     ms_gt_df = dp.calculate_aoa_ground_truth(ms_gt_df, position, orientation)
 
     # Rolling features
-    ms_gt_df["Azimuth_Error_Abs"] = (ms_gt_df["Azimuth"] - ms_gt_df["Azimuth_Real"]).abs()
     ms_gt_df["Azimuth_Var"] = ms_gt_df["Azimuth"].rolling(window=window_size).var()
+    ms_gt_df["Azimuth_Error_Abs"] = (ms_gt_df["Azimuth_Real"] - ms_gt_df["Azimuth"]).abs()
     ms_gt_df["Error_Mean"] = ms_gt_df["Azimuth_Error_Abs"].rolling(window=window_size).mean()
 
     # Filter 
-    ms_gt_df = ms_gt_df[ms_gt_df["Azimuth_Var"] <= 400].copy()
+    ms_gt_df = ms_gt_df[ms_gt_df["Azimuth_Var"] <= 500].copy()
 
     
     # Drop rows with NaNs from rolling
@@ -70,7 +70,9 @@ def calculate_exponential_fit():
     x_fit = np.linspace(min(x), max(x), 100)
     y_fit = power_func(x_fit, a, b)
 
-    plt.scatter(x, y, label="Data", alpha=0.05)
+    print(len(ms_gt_df))
+
+    plt.scatter(x, y, label="Data", alpha=0.01)
     plt.plot(x_fit, y_fit, color="red", label=f"Fitted: y = {a:.2f} * x^{b:.2f}")
     plt.xlabel("Azimuth_Var")
     plt.ylabel("Error_Mean")

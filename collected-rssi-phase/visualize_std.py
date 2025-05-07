@@ -10,16 +10,16 @@ def plot_variance_heatmaps():
 
     # Load files
     config = yaml.safe_load(open(os.path.join(base_dir, "../collected-config.yml")))
-    config['anchors'] = config['anchors']['0409']
+    config['anchors'] = config['anchors']['0414']
     delta = config['delta']
     offset = config['offset']
 
     anchor_id = 1
 
-    gt_path = os.path.join(base_dir, "../dataset/0409/gt/anchor1.csv")
+    gt_path = os.path.join(base_dir, "../dataset/0414/gt/anchor4.csv")
     gt_df = pd.read_csv(gt_path)
 
-    ms_path = os.path.join(base_dir, "../dataset/0409/beacons/anchor1.csv")
+    ms_path = os.path.join(base_dir, "../dataset/0414/beacons/anchor4.csv")
     ms_df = pd.read_csv(ms_path)
 
     # Preprocess the data

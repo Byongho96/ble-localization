@@ -1,7 +1,7 @@
 delta: 200
 offset: 200
 
-threshold: 10
+threshold: 0
 
 anchors:
   rectangular:
@@ -45,6 +45,9 @@ anchors:
       orientation: 180
 
   '0414':
+    1:
+      position: [270, 450, 138] # 138
+      orientation: 180
     4:
       position: [270, 450, 138] # 138
       orientation: 180
@@ -62,3 +65,17 @@ anchors:
     4:
       position: [0, 315, 140]
       orientation: 90
+
+  '0421':
+    1:
+      position: [0, 630, 140] # 140
+      orientation: 135
+    2:
+      position: [630, 630, 140]
+      orientation: 225
+    3:
+      position: [630, 0, 140]
+      orientation: 315
+    4:
+      position: [0, 0, 140]
+      orientation: 45

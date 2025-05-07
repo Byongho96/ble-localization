@@ -40,7 +40,8 @@ def aoa_kf(dic: dict, delta: int):
     all_anchors_results[1]['raw']['Zero'] = 0
     
     vs.visualize_all_anchors_with_heatmap({anchor_id: results['raw'] for anchor_id, results in all_anchors_results.items()}, 'Distance', 'RSSI_Distance', vmin=0, vmax=300, title="Raw AoA")   
-    vs.visualize_all_anchors_with_heatmap({anchor_id: results['raw'] for anchor_id, results in all_anchors_results.items()}, 'Zero', 'RSSI', vmin=0, vmax=100, title="Raw AoA")   
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results['raw'] for anchor_id, results in all_anchors_results.items()}, 'Zero', 'RSSI', vmin=50, vmax=70, title="RSSI")   
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results['raw'] for anchor_id, results in all_anchors_results.items()}, 'Zero', 'RSSI_Std', vmin=0, vmax=9, title="RSSI Sd")   
     # vs.visualize_all_anchors_with_heatmap({anchor_id: results['maf'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_MAF', vmin=0, vmax=15, title="MAF AoA")
     # vs.visualize_all_anchors_with_heatmap({anchor_id: results['median'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_Median', vmin=0, vmax=15, title="Median AoA")
     # vs.visualize_all_anchors_with_heatmap({anchor_id: results['low_pass'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_LowPass', vmin=0, vmax=15, title="Low Pass AoA")
@@ -86,14 +87,14 @@ def calibration(anchors_parameters_dict):
 
     # Load files
     config = yaml.safe_load(open(os.path.join(base_dir, "../collected-config.yml")))
-    config['anchors'] = config['anchors']['0409']
+    config['anchors'] = config['anchors']['0414']
     delta = config['delta']
     offset = config['offset']
 
-    gt_path = os.path.join(base_dir, "../dataset/0409/gt/anchor1.csv")
+    gt_path = os.path.join(base_dir, "../dataset/0414/gt/anchor4.csv")
     gt_df = pd.read_csv(gt_path)
 
-    ms_path_1 = os.path.join(base_dir, "../dataset/0409/beacons/anchor1.csv")
+    ms_path_1 = os.path.join(base_dir, "../dataset/0414/beacons/anchor4.csv")
     ms_df_1 = pd.read_csv(ms_path_1)
     # ms_path_2 = os.path.join(base_dir, "../dataset/0409/beacons/rectangular.csv")
     # ms_df_2 = pd.read_csv(ms_path_2)
