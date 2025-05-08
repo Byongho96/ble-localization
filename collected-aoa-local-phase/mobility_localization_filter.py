@@ -208,6 +208,8 @@ def weighted_least_squares_triangulation(df: pd.DataFrame, config: dict, anchor_
     est = []
     cnt = 0
 
+    print(df)
+
     for time_bucket, row in df.iterrows():
         A, b, W_list = [], [], []
         valid = 0
@@ -466,143 +468,133 @@ def local_extended_kalman_filter_pre(df: pd.DataFrame, config: dict, anchor_ids:
 def local_extended_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: list, dt: int = 20, threshold: int = 0) -> pd.DataFrame:
     """
     Extended Kalman Filter with constant velocity model (state: [x, y, vx, vy]).
-    Supports variable number of valid AoA measurements per time step.
-    
+    Includes Mahalanobis gating. If gating fails, only prediction is used and
+    threshold is relaxed based on accumulated dt.
+
     Parameters:
         df (pd.DataFrame): DataFrame with ["X_Real", "Y_Real"] and each anchor's "Azimuth" information.
         config (dict): Configuration containing anchor positions and orientations.
         anchor_ids (list): List of anchor IDs.
         dt (int): Time interval (in milliseconds; converted to seconds internally).
-        threshold (int): Threshold for the number of iterations before starting to save results.
-    
+        threshold (int): Threshold for the number of iterations before saving results.
+
     Returns:
         pd.DataFrame: DataFrame with ["Time_Bucket", "X_Real", "Y_Real", "X_EKF", "Y_EKF"] columns.
     """
     print("Start the Extended Kalman Filter Process")
-    
-    dt /= 1000  # Convert ms to seconds
-    
-    ekf = ExtendedKalmanFilter(dim_x=4, dim_z=1)
 
-    # 초기 상태
-    ekf.x = np.array([
-        90,  # x
-        540,   # y
-        0.0,                         # v
-        0.0                          # theta
-    ])
+    dt_sec = dt / 1000  # Convert ms to seconds
 
-    # 초기 추정 공분산
-    ekf.P *= 500.0
-
-    """
-    1.
-    10, 1, 0.1
-    13, 3, 1.7
-    """
-    # 프로세스 노이즈 공분산: pos_noise_std = 10, v_noise_std = 1, theta_noise_std = 0.1
-    ekf.Q = np.diag([13**2, 13**2, 3**2, 1.7**2])
-
-    # 상태 예측 함수
-    def fx(x, dt):
-        x_new = x.copy()
-        v = x[2]
-        theta = x[3]
-        x_new[0] += v * np.cos(theta) * dt
-        x_new[1] += v * np.sin(theta) * dt
-        # v, theta remain unchanged
-        return x_new
-    fx_lambda = lambda x: fx(x, dt)
-
-    # 상태 전이 함수의 Jacobian
-    def FJacobian(x, dt):
-        _, _, v, theta = x
-        return np.array([
-            [1, 0, np.cos(theta)*dt, -v*np.sin(theta)*dt],
-            [0, 1, np.sin(theta)*dt,  v*np.cos(theta)*dt],
-            [0, 0, 1,                0],
-            [0, 0, 0,                1]
+    # State transition function (constant velocity)
+    def fx(x, delta):
+        F = np.array([
+            [1, 0, delta, 0],
+            [0, 1, 0, delta],
+            [0, 0, 1,     0],
+            [0, 0, 0,     1]
         ])
-    FJacobian_lambda = lambda x: FJacobian(x, dt)
+        return F @ x
 
-    # 설정
-    ekf.fx = fx_lambda
-    ekf.FJacobian = FJacobian_lambda
+    def FJacobian(x, delta):
+        return np.array([
+            [1, 0, delta, 0],
+            [0, 1, 0, delta],
+            [0, 0, 1,     0],
+            [0, 0, 0,     1]
+        ])
 
-    estimated_positions = []
+    # Initialize EKF
+    ekf = ExtendedKalmanFilter(dim_x=4, dim_z=1)  # z dimension will vary
+
+    ekf.x = np.array([540, 90, 0.0, 0.0])  # Initial state [x, y, vx, vy]
+    ekf.P *= 500.0                         # Initial covariance
+    ekf.Q = np.diag([13**2, 13**2, 10**2, 10**2])  # Process noise
+
+    delta_accum = 0
     th = 0
+    estimated_positions = []
 
-    # Run the EKF
     for time_bucket, row in df.iterrows():
         measured_aoa = []
         valid_positions = []
         valid_orientations = []
+        az_vars = []
 
         for aid in anchor_ids:
             az = row.get(f"{aid}_Azimuth", np.nan)
-            if not pd.isna(az):
+            var = row.get(f"{aid}_Azimuth_Var", np.nan)
+            if not pd.isna(az) and not pd.isna(var):
                 measured_aoa.append(az)
                 valid_positions.append(config["anchors"][aid]["position"])
                 valid_orientations.append(config["anchors"][aid]["orientation"])
+                az_vars.append(var)
 
         if len(measured_aoa) < LEAST_ANCHORS:
-            continue  # Skip update if fewer than 2 anchors are available
+            continue
 
         measured_aoa = np.array(measured_aoa)
+        az_vars = np.array(az_vars)
         anchors_position_np = np.array(valid_positions)
         anchors_orientation_rad = np.deg2rad(valid_orientations)
 
-        # Measurement function (variable-length)
+        # Define measurement function hx
         def hx(x):
             pos = x[:2]
             predicted_angles = []
-            for (ax, ay, az), a_ori_rad in zip(anchors_position_np, anchors_orientation_rad):
+            for (ax, ay, _), a_ori_rad in zip(anchors_position_np, anchors_orientation_rad):
                 angle = np.arctan2(pos[0] - ax, pos[1] - ay) - a_ori_rad
-                angle = (angle + np.pi) % (2 * np.pi) - np.pi
+                angle = (angle + np.pi) % (2 * np.pi) - np.pi  # normalize
                 predicted_angles.append(np.degrees(angle))
             return np.array(predicted_angles)
 
-        # Jacobian of the measurement function
+        # Define Jacobian of hx
         def HJacobian(x):
             H = np.zeros((len(anchors_position_np), 4))
-            for i, (ax, ay, az) in enumerate(anchors_position_np):
+            for i, (ax, ay, _) in enumerate(anchors_position_np):
                 dx = x[0] - ax
                 dy = x[1] - ay
                 denom = dx**2 + dy**2
                 if denom == 0:
-                    H[i, 0] = 0
-                    H[i, 1] = 0
-                else:
-                    H[i, 0] = (180 / np.pi) * (dy / denom)
-                    H[i, 1] = (180 / np.pi) * (-dx / denom)
+                    continue
+                H[i, 0] = (180 / np.pi) * (dy / denom)
+                H[i, 1] = (180 / np.pi) * (-dx / denom)
             return H
 
-        # Measurement noise (adjusted dynamically)
-        # 측정값에 대한 오차 가중치 계산
-        az_vars = np.array([row.get(f"{aid}_Azimuth_Var", np.nan) for aid in anchor_ids])
-        az_vars = az_vars[~np.isnan(az_vars)]  # 유효한 분산만 추림
+        # Measurement noise R
+        az_std_devs = aoa_np_error_model(az_vars)  # returns std in degrees
+        R = np.diag(az_std_devs ** 1.4)
+        ekf.R = R
 
-        if len(az_vars) != len(measured_aoa):
-            continue  # 가중치와 측정값 개수가 맞지 않으면 스킵
-
-        # 모델 기반으로 각도 오차 표준편차 계산
-        az_std_devs = aoa_np_error_model(az_vars)  # 이 값은 degrees 단위 오차 (표준편차)
-
-        # 공분산 행렬 R 설정 (각 측정값에 따른 오차 제곱)
-        ekf.R = np.diag(az_std_devs ** 1.4)
-
-        # Predict and update
+        # Predict step (with current delta)
+        ekf.fx = lambda x: fx(x, dt_sec + delta_accum / 1000)
+        ekf.FJacobian = lambda x: FJacobian(x, dt_sec + delta_accum / 1000)
         ekf.predict()
-        ekf.update(measured_aoa, HJacobian, hx)
+
+        # Compute Mahalanobis distance
+        z = measured_aoa
+        z_hat = hx(ekf.x)
+        y = z - z_hat
+        y = (y + 180) % 360 - 180  # wrap-around correction
+
+        try:
+            S = R
+            D_M = np.sqrt(y.T @ np.linalg.inv(S) @ y)
+            threshold_dynamic = 10 + (delta_accum / 1000) * 0.5  # dynamic gating
+            print(f"Mahalanobis distance: {D_M}, threshold: {threshold_dynamic}")
+            if D_M < threshold_dynamic:
+                ekf.update(z, HJacobian, hx)
+                delta_accum = 0
+            else:
+                delta_accum += dt
+        except np.linalg.LinAlgError:
+            delta_accum += dt
 
         x_ekf, y_ekf = ekf.x[0], ekf.x[1]
-
-        th += 1
         if th > threshold:
             estimated_positions.append([time_bucket, row["X_Real"], row["Y_Real"], x_ekf, y_ekf])
+        th += 1
 
     return pd.DataFrame(estimated_positions, columns=["Time_Bucket", "X_Real", "Y_Real", "X_EKF", "Y_EKF"])
-
 
 def local_unscented_kalman_filter_pre(df: pd.DataFrame, config: dict, anchor_ids: list, dt: int = 20, threshold: int = 0, i: int = 1, j: int =9, k:float= 1.0) -> pd.DataFrame:
     """

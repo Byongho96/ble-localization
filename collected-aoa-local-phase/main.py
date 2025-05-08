@@ -75,7 +75,7 @@ def aoa_local_mobile_kf(df: pd.DataFrame, anchor_ids: list[int], config: dict, d
     all_results['ekf'] = mlf.local_extended_kalman_filter(df, config, anchor_ids, delta, threshold)
 
     all_results['ukf-pre'] = mlf.local_unscented_kalman_filter_pre(df, config, anchor_ids, delta, threshold)
-    all_results['ukf'] = mlf.local_unscented_kalman_filter(df, config, anchor_ids, delta, threshold)
+    # all_results['ukf'] = mlf.local_unscented_kalman_filter(df, config, anchor_ids, delta, threshold)
 
     all_results['pf'] = mlf.local_particle_filter(df, config, anchor_ids, delta, threshold)
 
@@ -88,7 +88,7 @@ def aoa_local_mobile_kf(df: pd.DataFrame, anchor_ids: list[int], config: dict, d
     vs.visualize_distance_error_with_heatmap(all_results['wls_kf'], 'X_Real', 'Y_Real', 'X_2D_KF', 'Y_2D_KF', vmin=0, vmax=200, title="2D Local")
 
     vs.visualize_distance_error_with_heatmap(all_results['ekf-pre'], 'X_Real', 'Y_Real', 'X_EKF', 'Y_EKF', vmin=0, vmax=200, title="Extended Local")
-    # vs.visualize_distance_error_with_heatmap(all_results['ekf'], 'X_Real', 'Y_Real', 'X_EKF', 'Y_EKF', vmin=0, vmax=200, title="Extended Local")
+    vs.visualize_distance_error_with_heatmap(all_results['ekf'], 'X_Real', 'Y_Real', 'X_EKF', 'Y_EKF', vmin=0, vmax=200, title="Extended Local")
 
     vs.visualize_distance_error_with_heatmap(all_results['ukf-pre'], 'X_Real', 'Y_Real', 'X_UKF', 'Y_UKF', vmin=0, vmax=200, title="Unscented Local")
     # vs.visualize_distance_error_with_heatmap(all_results['ukf'], 'X_Real', 'Y_Real', 'X_UKF', 'Y_UKF', vmin=0, vmax=200, title="Unscented Local")
@@ -150,7 +150,7 @@ def calibration():
 
 
 def mobility():
-    TYPE = '0421'
+    TYPE = '0416'
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -164,28 +164,29 @@ def mobility():
     offset = config['offset']
     threshold = config['threshold']
 
-    gt_path = os.path.join(base_dir, f"../dataset/{TYPE}/gt/grid.csv")
-    gt_df = pd.read_csv(gt_path)
-
-    ms_path_1 = os.path.join(base_dir, f"../dataset/{TYPE}/beacons/anchor1/diagonal-grid.csv")
-    ms_df_1 = pd.read_csv(ms_path_1)
-    ms_path_2 = os.path.join(base_dir, f"../dataset/{TYPE}/beacons/anchor2/diagonal-grid.csv")
-    ms_df_2 = pd.read_csv(ms_path_2)
-    ms_path_3 = os.path.join(base_dir, f"../dataset/{TYPE}/beacons/anchor3/diagonal-grid.csv")
-    ms_df_3 = pd.read_csv(ms_path_3)
-    ms_path_4 = os.path.join(base_dir, f"../dataset/{TYPE}/beacons/anchor4/diagonal-grid.csv")
-    ms_df_4 = pd.read_csv(ms_path_4)
-    # gt_path = os.path.join(base_dir, f"../dataset/0416/gt/rectangular-edge.csv")
+    # gt_path = os.path.join(base_dir, f"../dataset/{TYPE}/gt/set-low-3.csv")
     # gt_df = pd.read_csv(gt_path)
 
-    # ms_path_1 = os.path.join(base_dir, f"../dataset/0416/beacons/rectangular-edge/anchor1.csv")
+    # ms_path_1 = os.path.join(base_dir, f"../dataset/{TYPE}/beacons/anchor1/diagonal-set.csv")
     # ms_df_1 = pd.read_csv(ms_path_1)
-    # ms_path_2 = os.path.join(base_dir, f"../dataset/0416/beacons/rectangular-edge/anchor2.csv")
+    # ms_path_2 = os.path.join(base_dir, f"../dataset/{TYPE}/beacons/anchor2/diagonal-set.csv")
     # ms_df_2 = pd.read_csv(ms_path_2)
-    # ms_path_3 = os.path.join(base_dir, f"../dataset/0416/beacons/rectangular-edge/anchor3.csv")
+    # ms_path_3 = os.path.join(base_dir, f"../dataset/{TYPE}/beacons/anchor3/diagonal-set.csv")
     # ms_df_3 = pd.read_csv(ms_path_3)
-    # ms_path_4 = os.path.join(base_dir, f"../dataset/0416/beacons/rectangular-edge/anchor4.csv")
+    # ms_path_4 = os.path.join(base_dir, f"../dataset/{TYPE}/beacons/anchor4/diagonal-set.csv")
     # ms_df_4 = pd.read_csv(ms_path_4)
+
+    gt_path = os.path.join(base_dir, f"../dataset/0416/gt/rectangular-mid-reverse.csv")
+    gt_df = pd.read_csv(gt_path)
+
+    ms_path_1 = os.path.join(base_dir, f"../dataset/0416/beacons/rectangular-mid/anchor1.csv")
+    ms_df_1 = pd.read_csv(ms_path_1)
+    ms_path_2 = os.path.join(base_dir, f"../dataset/0416/beacons/rectangular-mid/anchor2.csv")
+    ms_df_2 = pd.read_csv(ms_path_2)
+    ms_path_3 = os.path.join(base_dir, f"../dataset/0416/beacons/rectangular-mid/anchor3.csv")
+    ms_df_3 = pd.read_csv(ms_path_3)
+    ms_path_4 = os.path.join(base_dir, f"../dataset/0416/beacons/rectangular-mid/anchor4.csv")
+    ms_df_4 = pd.read_csv(ms_path_4)
 
     # Interpolate the ground truth data
     gt_interpolated_df = dp.interpolate_ground_truth(gt_df, delta)
