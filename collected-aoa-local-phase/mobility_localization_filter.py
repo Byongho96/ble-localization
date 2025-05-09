@@ -208,7 +208,6 @@ def weighted_least_squares_triangulation(df: pd.DataFrame, config: dict, anchor_
     est = []
     cnt = 0
 
-    print(df)
 
     for time_bucket, row in df.iterrows():
         A, b, W_list = [], [], []
@@ -274,23 +273,24 @@ def local_2D_kalman_filter(df: pd.DataFrame, dt: int = 20) -> pd.DataFrame:
     '''
     dt /= 1000  # ms -> sec
 
-    kf = KalmanFilter(dim_x=4, dim_z=2)
+    kf = KalmanFilter(dim_x=4, dim_z=4)
 
     # Initial state: [x, y, vx, vy]
-    kf.x = np.array([df.iloc[0]["X_WLS"], df.iloc[0]["Y_WLS"],
-                     0.0, 0.0])
+    kf.x = np.array([df.iloc[0]["X_WLS"], df.iloc[0]["Y_WLS"], 0.0, 0.0])
 
     # State Transition Matrix
     kf.F = np.array([
-        [1, 0,  dt,  0],
+        [1,  0, dt,  0],
         [0,  1,  0, dt],
         [0,  0,  1,  0],
         [0,  0,  0,  1]])
     
     # Measurement Matrix
     kf.H = np.array([
-        [1, 0, 0, 0],
-        [0, 1, 0, 0]])
+        [1,  0,  0,  0],
+        [0,  1,  0,  0],
+        [0,  0,  1,  0],
+        [0,  0,  0,  1]])
     
     """
     Mean Error : 78 -> 55
@@ -306,23 +306,125 @@ def local_2D_kalman_filter(df: pd.DataFrame, dt: int = 20) -> pd.DataFrame:
     kf.Q = np.diag([5 ** 2, 5 ** 2, 1 ** 2, 1 ** 2])
 
     # Measurement Noise Covariance
-    kf.R = np.diag([22 ** 2, 22 ** 2])  
+    kf.R = np.diag([22 ** 2, 22 ** 2, 10 ** 2, 10 ** 2])
 
     filtered_positions = []
 
+    prev_x = df.iloc[0]["X_WLS"]
+    prev_y = df.iloc[0]["Y_WLS"]
+
     # Run the Kalman Filter    
-    for _, row in df.iterrows():
+    for idx, row in df.iterrows():
+        
         # Prediction step
         kf.predict()
 
+        # Compute pseudo velocity from position difference
+        if idx == 0:
+            vx, vy = 0.0, 0.0
+        else:
+            vx = (row["X_WLS"] - prev_x) / dt
+            vy = (row["Y_WLS"] - prev_y) / dt
+
+        prev_x = row["X_WLS"]
+        prev_y = row["Y_WLS"]
+
         # Update step
-        z = np.array([float(row["X_WLS"]), float(row["Y_WLS"])])
+        z = np.array([float(row["X_WLS"]), float(row["Y_WLS"]), vx, vy])
+
         kf.update(z)
 
         # Save the filtered position
         filtered_positions.append([float(kf.x[0]), float(kf.x[1])])
 
     df["X_2D_KF"], df["Y_2D_KF"] = zip(*filtered_positions)
+    return df
+
+def local_2D_kalman_filter_with_gating(df: pd.DataFrame, dt: int = 20, base_threshold: float = 3.0) -> pd.DataFrame:
+    '''
+    Localization 2D Kalman Filter with Mahalanobis Gating
+
+    Parameters:
+        df (pd.DataFrame): Input DataFrame with ["X_WLS", "Y_WLS"]
+        dt (int): time interval in milliseconds
+        base_threshold (float): Mahalanobis distance base threshold
+
+    Returns:
+        pd.DataFrame: DataFrame with new ["X_2D_KF", "Y_2D_KF"] columns
+    '''
+    dt /= 1000  # ms -> sec
+
+    kf = KalmanFilter(dim_x=4, dim_z=4)
+
+    # Initial state: [x, y, vx, vy]
+    kf.x = np.array([df.iloc[0]["X_WLS"], df.iloc[0]["Y_WLS"], 0.0, 0.0])
+
+    # State Transition Matrix
+    kf.F = np.array([
+        [1,  0, dt,  0],
+        [0,  1,  0, dt],
+        [0,  0,  1,  0],
+        [0,  0,  0,  1]])
+
+    # Measurement Matrix
+    kf.H = np.eye(4)
+
+    # Initial Covariance Matrix
+    kf.P = np.eye(4) * 500.0
+
+    # Process Noise Covariance
+    kf.Q = np.diag([10 ** 2, 10 ** 2, 5 ** 2, 5 ** 2])
+
+    # Measurement Noise Covariance
+    kf.R = np.diag([10 ** 2, 10 ** 2, 5 ** 2, 5 ** 2])
+
+    filtered_positions = []
+
+    prev_x = df.iloc[0]["X_WLS"]
+    prev_y = df.iloc[0]["Y_WLS"]
+
+    dt_accum = 0  # 누적된 실패 시간
+
+    # Run the Kalman Filter    
+    for idx, row in df.iterrows():
+        # Prediction step
+        kf.predict()
+
+        # Compute pseudo velocity from position difference
+        if idx == 0:
+            vx, vy = 0.0, 0.0
+        else:
+            vx = (row["X_WLS"] - prev_x) / dt
+            vy = (row["Y_WLS"] - prev_y) / dt
+
+        prev_x = row["X_WLS"]
+        prev_y = row["Y_WLS"]
+
+        # Measurement vector: [x, y, vx, vy]
+        z = np.array([float(row["X_WLS"]), float(row["Y_WLS"]), vx, vy])
+
+        # Mahalanobis distance gating
+        y = z - np.dot(kf.H, kf.x)  # residual
+        S = np.dot(np.dot(kf.H, kf.P), kf.H.T) + kf.R  # innovation covariance
+        d_m = np.sqrt(np.dot(y.T, np.linalg.solve(S, y)))
+
+        # Threshold 조정
+        dynamic_threshold = 50 * (1 + dt_accum * 10)
+
+        print(f"Mahalanobis distance: {d_m}, threshold: {dynamic_threshold}")
+
+        if d_m <= dynamic_threshold:
+            # Update step
+            kf.update(z)
+            dt_accum = 0  # 성공적으로 업데이트되었으면 초기화
+        else:
+            # Update를 하지 않고 dt 누적
+            dt_accum += dt
+
+        # Save the filtered position
+        filtered_positions.append([float(kf.x[0]), float(kf.x[1])])
+
+    df["X_KF_GA"], df["Y_KF_GA"] = zip(*filtered_positions)
     return df
 
 def local_extended_kalman_filter_pre(df: pd.DataFrame, config: dict, anchor_ids: list, dt: int = 20, threshold: int = 0) -> pd.DataFrame:
@@ -467,132 +569,142 @@ def local_extended_kalman_filter_pre(df: pd.DataFrame, config: dict, anchor_ids:
 
 def local_extended_kalman_filter(df: pd.DataFrame, config: dict, anchor_ids: list, dt: int = 20, threshold: int = 0) -> pd.DataFrame:
     """
-    Extended Kalman Filter with constant velocity model (state: [x, y, vx, vy]).
-    Includes Mahalanobis gating. If gating fails, only prediction is used and
-    threshold is relaxed based on accumulated dt.
-
-    Parameters:
-        df (pd.DataFrame): DataFrame with ["X_Real", "Y_Real"] and each anchor's "Azimuth" information.
-        config (dict): Configuration containing anchor positions and orientations.
-        anchor_ids (list): List of anchor IDs.
-        dt (int): Time interval (in milliseconds; converted to seconds internally).
-        threshold (int): Threshold for the number of iterations before saving results.
-
-    Returns:
-        pd.DataFrame: DataFrame with ["Time_Bucket", "X_Real", "Y_Real", "X_EKF", "Y_EKF"] columns.
+    Extended Kalman Filter with constant velocity model (state: [x, y, vx, vy])
+    + Measured pseudo velocity update
     """
     print("Start the Extended Kalman Filter Process")
+    
+    dt /= 1000  # ms -> sec
 
-    dt_sec = dt / 1000  # Convert ms to seconds
-
-    # State transition function (constant velocity)
-    def fx(x, delta):
+    # State transition function (constant velocity model)
+    def fx(x, dt):
         F = np.array([
-            [1, 0, delta, 0],
-            [0, 1, 0, delta],
-            [0, 0, 1,     0],
-            [0, 0, 0,     1]
+            [1, 0, dt, 0],
+            [0, 1, 0, dt],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
         ])
         return F @ x
 
-    def FJacobian(x, delta):
+    fx_lambda = lambda x: fx(x, dt)
+
+    def FJacobian(x, dt):
         return np.array([
-            [1, 0, delta, 0],
-            [0, 1, 0, delta],
-            [0, 0, 1,     0],
-            [0, 0, 0,     1]
+            [1, 0, dt, 0],
+            [0, 1, 0, dt],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
         ])
+    FJacobian_lambda = lambda x: FJacobian(x, dt)
 
-    # Initialize EKF
-    ekf = ExtendedKalmanFilter(dim_x=4, dim_z=1)  # z dimension will vary
+    ekf = ExtendedKalmanFilter(dim_x=4, dim_z=0)  # dim_z는 매 iteration마다 바뀜
 
-    ekf.x = np.array([540, 90, 0.0, 0.0])  # Initial state [x, y, vx, vy]
-    ekf.P *= 500.0                         # Initial covariance
-    ekf.Q = np.diag([13**2, 13**2, 10**2, 10**2])  # Process noise
+    # 초기 상태
+    ekf.x = np.array([90.0, 540.0, 0.0, 0.0])
 
-    delta_accum = 0
-    th = 0
+    # 초기 공분산
+    ekf.P *= 500.0
+
+    # 프로세스 잡음
+    ekf.Q = np.diag([13**2, 13**2, 10**2, 10**2])
+
+    # State transition function 설정
+    ekf.fx = fx_lambda
+    ekf.FJacobian = FJacobian_lambda
+
     estimated_positions = []
+    th = 0
+
+    prev_real_x = None
+    prev_real_y = None
 
     for time_bucket, row in df.iterrows():
         measured_aoa = []
         valid_positions = []
         valid_orientations = []
-        az_vars = []
 
         for aid in anchor_ids:
             az = row.get(f"{aid}_Azimuth", np.nan)
-            var = row.get(f"{aid}_Azimuth_Var", np.nan)
-            if not pd.isna(az) and not pd.isna(var):
+            if not pd.isna(az):
                 measured_aoa.append(az)
                 valid_positions.append(config["anchors"][aid]["position"])
                 valid_orientations.append(config["anchors"][aid]["orientation"])
-                az_vars.append(var)
 
         if len(measured_aoa) < LEAST_ANCHORS:
             continue
 
         measured_aoa = np.array(measured_aoa)
-        az_vars = np.array(az_vars)
         anchors_position_np = np.array(valid_positions)
         anchors_orientation_rad = np.deg2rad(valid_orientations)
 
-        # Define measurement function hx
+        # Calculate pseudo velocity
+        if prev_real_x is None or prev_real_y is None:
+            pseudo_vx, pseudo_vy = 0.0, 0.0
+        else:
+            pseudo_vx = (row["X_Real"] - prev_real_x) / dt
+            pseudo_vy = (row["Y_Real"] - prev_real_y) / dt
+
+        prev_real_x = row["X_Real"]
+        prev_real_y = row["Y_Real"]
+
+        # Measurement function
         def hx(x):
             pos = x[:2]
-            predicted_angles = []
-            for (ax, ay, _), a_ori_rad in zip(anchors_position_np, anchors_orientation_rad):
-                angle = np.arctan2(pos[0] - ax, pos[1] - ay) - a_ori_rad
-                angle = (angle + np.pi) % (2 * np.pi) - np.pi  # normalize
-                predicted_angles.append(np.degrees(angle))
-            return np.array(predicted_angles)
+            vel = x[2:]
+            predicted = []
+            for (ax, ay, az), ori in zip(anchors_position_np, anchors_orientation_rad):
+                angle = np.arctan2(pos[0] - ax, pos[1] - ay) - ori
+                angle = (angle + np.pi) % (2 * np.pi) - np.pi
+                predicted.append(np.degrees(angle))
+            predicted += [vel[0], vel[1]]  # vx, vy 추가
+            return np.array(predicted)
 
-        # Define Jacobian of hx
+        # Jacobian of measurement function
         def HJacobian(x):
-            H = np.zeros((len(anchors_position_np), 4))
-            for i, (ax, ay, _) in enumerate(anchors_position_np):
+            H = np.zeros((len(anchors_position_np) + 2, 4))
+            for i, (ax, ay, az) in enumerate(anchors_position_np):
                 dx = x[0] - ax
                 dy = x[1] - ay
                 denom = dx**2 + dy**2
                 if denom == 0:
-                    continue
-                H[i, 0] = (180 / np.pi) * (dy / denom)
-                H[i, 1] = (180 / np.pi) * (-dx / denom)
+                    H[i, 0] = 0
+                    H[i, 1] = 0
+                else:
+                    H[i, 0] = (180 / np.pi) * (dy / denom)
+                    H[i, 1] = (180 / np.pi) * (-dx / denom)
+            H[-2, 2] = 1  # vx
+            H[-1, 3] = 1  # vy
             return H
 
+        # Measurement z
+        z = np.concatenate([measured_aoa, [pseudo_vx, pseudo_vy]])
+
         # Measurement noise R
-        az_std_devs = aoa_np_error_model(az_vars)  # returns std in degrees
-        R = np.diag(az_std_devs ** 1.4)
-        ekf.R = R
+        az_vars = np.array([row.get(f"{aid}_Azimuth_Var", np.nan) for aid in anchor_ids])
+        az_vars = az_vars[~np.isnan(az_vars)]
 
-        # Predict step (with current delta)
-        ekf.fx = lambda x: fx(x, dt_sec + delta_accum / 1000)
-        ekf.FJacobian = lambda x: FJacobian(x, dt_sec + delta_accum / 1000)
+        if len(az_vars) != len(measured_aoa):
+            continue
+
+        az_std_devs = aoa_np_error_model(az_vars)
+
+        # 마지막 2개는 속도 관측 오차 (여기선 5m/s 정도 오차 가정)
+        vel_std_dev = 10
+        r_diag = np.concatenate([
+            az_std_devs ** 2,  
+            [vel_std_dev ** 2, vel_std_dev ** 2]
+        ])
+        ekf.R = np.diag(r_diag)
+
+        # Predict and update
         ekf.predict()
-
-        # Compute Mahalanobis distance
-        z = measured_aoa
-        z_hat = hx(ekf.x)
-        y = z - z_hat
-        y = (y + 180) % 360 - 180  # wrap-around correction
-
-        try:
-            S = R
-            D_M = np.sqrt(y.T @ np.linalg.inv(S) @ y)
-            threshold_dynamic = 10 + (delta_accum / 1000) * 0.5  # dynamic gating
-            print(f"Mahalanobis distance: {D_M}, threshold: {threshold_dynamic}")
-            if D_M < threshold_dynamic:
-                ekf.update(z, HJacobian, hx)
-                delta_accum = 0
-            else:
-                delta_accum += dt
-        except np.linalg.LinAlgError:
-            delta_accum += dt
+        ekf.update(z, HJacobian, hx)
 
         x_ekf, y_ekf = ekf.x[0], ekf.x[1]
+
+        th += 1
         if th > threshold:
             estimated_positions.append([time_bucket, row["X_Real"], row["Y_Real"], x_ekf, y_ekf])
-        th += 1
 
     return pd.DataFrame(estimated_positions, columns=["Time_Bucket", "X_Real", "Y_Real", "X_EKF", "Y_EKF"])
 

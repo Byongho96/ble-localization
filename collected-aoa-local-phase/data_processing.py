@@ -95,7 +95,7 @@ def calculate_aoa_ground_truth(df: pd.DataFrame, position: list[float, float, fl
 
     return result_df
 
-def discretize_by_delta(df: pd.DataFrame, dt: int = 0) -> pd.DataFrame:
+def discretize_by_delta(df: pd.DataFrame, min_ts, dt: int = 0) -> pd.DataFrame:
     """
     Discretize the data by time intervals (dt).
 
@@ -110,7 +110,7 @@ def discretize_by_delta(df: pd.DataFrame, dt: int = 0) -> pd.DataFrame:
         return df.copy()
 
     df = df.copy()
-    min_ts = df["Timestamp"].min()
+    # min_ts = df["Timestamp"].min()
     df["Time_Bucket"] = ((df["Timestamp"] - min_ts) // dt).astype(int)
 
     # 1) 평균
