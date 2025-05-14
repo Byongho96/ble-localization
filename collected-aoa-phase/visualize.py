@@ -28,11 +28,13 @@ def visualize_all_anchors_with_heatmap(all_results: dict, gt_column: str, ms_col
     for idx, (anchor_id, df) in enumerate(all_results.items()):
         ax = axes[idx]
 
-        # Compute absolute error
-        df["AbsError"] = (df[ms_column] - df[gt_column]).abs()
+        # Group by position and compute mean of ms_column and gt_column
+        grouped = df.groupby(["X_Real", "Y_Real"])[[ms_column, gt_column]].mean().reset_index()
 
-        # Group by position and compute mean error
-        grouped = df.groupby(["X_Real", "Y_Real"])["AbsError"].mean().reset_index()
+
+        # Compute absolute error between the two means
+        grouped["AbsError"] = (grouped[ms_column] - grouped[gt_column])
+        print(grouped)
 
         # Scatter plot
         sc = ax.scatter(grouped["X_Real"], grouped["Y_Real"], c=grouped["AbsError"],
@@ -40,6 +42,7 @@ def visualize_all_anchors_with_heatmap(all_results: dict, gt_column: str, ms_col
 
         # Add text label for error at each point
         for _, row in grouped.iterrows():
+            # print(row["X_Real"], row["Y_Real"], f"{row['AbsError']:.2f}")
             ax.text(row["X_Real"], row["Y_Real"], f"{row['AbsError']:.2f}",
                     ha='center', va='center', fontsize=9, color='black', weight='bold')
 
