@@ -33,8 +33,7 @@ def visualize_all_anchors_with_heatmap(all_results: dict, gt_column: str, ms_col
 
 
         # Compute absolute error between the two means
-        grouped["AbsError"] = (grouped[ms_column] - grouped[gt_column])
-        print(grouped)
+        grouped["AbsError"] = (grouped[ms_column] - grouped[gt_column]).abs()
 
         # Scatter plot
         sc = ax.scatter(grouped["X_Real"], grouped["Y_Real"], c=grouped["AbsError"],

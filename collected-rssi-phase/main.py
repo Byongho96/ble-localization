@@ -87,14 +87,14 @@ def calibration(anchors_parameters_dict):
 
     # Load files
     config = yaml.safe_load(open(os.path.join(base_dir, "../collected-config.yml")))
-    config['anchors'] = config['anchors']['0414']
+    config['anchors'] = config['anchors']['0409']
     delta = config['delta']
     offset = config['offset']
 
-    gt_path = os.path.join(base_dir, "../dataset/0414/gt/anchor4.csv")
+    gt_path = os.path.join(base_dir, "../dataset/0409/gt/anchor1.csv")
     gt_df = pd.read_csv(gt_path)
 
-    ms_path_1 = os.path.join(base_dir, "../dataset/0414/beacons/anchor4.csv")
+    ms_path_1 = os.path.join(base_dir, "../dataset/0409/beacons/anchor1.csv")
     ms_df_1 = pd.read_csv(ms_path_1)
     # ms_path_2 = os.path.join(base_dir, "../dataset/0409/beacons/rectangular.csv")
     # ms_df_2 = pd.read_csv(ms_path_2)
@@ -118,6 +118,10 @@ def calibration(anchors_parameters_dict):
         rssi_0, n = anchors_parameters_dict[anchor_id]['rssi_0'], anchors_parameters_dict[anchor_id]['n']
 
         anchor_gt_df = dp.filter_with_position_ground_truth(gt_df, anchor_df, offset)
+
+        # only get channel > 30 and < 40
+        # anchor_gt_df = anchor_gt_df[(anchor_gt_df['Channel'] >= 0) & (anchor_gt_df['Channel'] < 10)]
+
         anchor_gt_discretized_df = dp.discretize_by_delta(anchor_gt_df, delta)
         anchor_gt_discretized_rssi_df = dp.calculate_rssi_and_distance(anchor_gt_discretized_df, position)
         anchor_gt_discretized_rssi_estimated_df = dp.calculate_rssi_estimated_distance(anchor_gt_discretized_rssi_df, rssi_0, n)

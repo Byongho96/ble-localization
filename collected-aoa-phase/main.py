@@ -11,16 +11,20 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import scipy.stats as stats
 
+from sklearn.mixture import GaussianMixture
+from scipy.stats import median_abs_deviation, gaussian_kde
+
 def plot_azimuth_distribution(df: pd.DataFrame, column: str = "Azimuth"):
     data = df[column].dropna()
 
+    print("Azimuth_Real",  df["Azimuth_Real"].mean(), '|', "Azimuth", df[column].mean())
 
     # ─── Histogram with KDE and normal curve ─────────────────────
     mu, std = np.mean(data), np.std(data)
     xmin, xmax = min(data), max(data)
     x = np.linspace(xmin, xmax, 100)
 
-    print(df, xmin, xmax)
+    # print(df, xmin, xmax)
     plt.figure(figsize=(14, 6))
 
     plt.subplot(1, 2, 1)
@@ -81,7 +85,7 @@ def aoa_kf(dic: dict, delta: int):
 
     # Show the results
     # vs.visualize_all_anchors_with_heatmap({anchor_id: results['raw'] for anchor_id, results in all_anchors_results.items()}, 'Elevation_Real', 'Elevation', vmin=0, vmax=15, title="Raw AoA")   
-    vs.visualize_all_anchors_with_heatmap({anchor_id: results['maf'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_MAF', vmin=0, vmax=15, title="MAF AoA")
+    vs.visualize_all_anchors_with_heatmap({anchor_id: results['maf'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_MAF', vmin=-15, vmax=15, title="MAF AoA")
     # vs.visualize_all_anchors_with_heatmap({anchor_id: results['median'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_Median', vmin=0, vmax=15, title="Median AoA")
     # vs.visualize_all_anchors_with_heatmap({anchor_id: results['low_pass'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_LowPass', vmin=0, vmax=15, title="Low Pass AoA")
     # vs.visualize_all_anchors_with_heatmap({anchor_id: results['1d_kf'] for anchor_id, results in all_anchors_results.items()}, 'Azimuth_Real', 'Azimuth_1d_KF', vmin=0, vmax=15, title="1D KF AoA")
@@ -93,13 +97,13 @@ def calibration():
     # Load files
     config = yaml.safe_load(open(os.path.join(base_dir, "../collected-config.yml")))
     config['anchors'] = config['anchors']['0409']
-    delta = config['delta']
+    delta = 500
     offset = config['offset']
 
-    gt_path = os.path.join(base_dir, "../dataset/0409/gt/anchor2.csv")
+    gt_path = os.path.join(base_dir, "../dataset/0409/gt/anchor1.csv")
     gt_df = pd.read_csv(gt_path)
 
-    ms_path_1 = os.path.join(base_dir, "../dataset/0409/beacons/anchor2.csv")
+    ms_path_1 = os.path.join(base_dir, "../dataset/0409/beacons/anchor1.csv")
     ms_df_1 = pd.read_csv(ms_path_1)
     # ms_path_2 = os.path.join(base_dir, "../dataset/0414/beacons/rectangular.csv")
     # ms_df_2 = pd.read_csv(ms_path_2)
@@ -122,21 +126,12 @@ def calibration():
         orientation = config['anchors'][anchor_id]['orientation']
     
         anchor_gt_df = dp.filter_with_position_ground_truth(gt_df, anchor_df, offset)
+        anchor_gt_discretized_df = dp.discretize_by_delta(anchor_gt_df, delta, filter=True)
+        anchor_gt_discretized_aoa_df = dp.calculate_aoa_ground_truth(anchor_gt_discretized_df, position, orientation)
 
-        # filter where "X_Real" == 0 and "Y_Real" == 0 
-        target_df = anchor_gt_df[(anchor_gt_df["X_Real"] == 450) & (anchor_gt_df["Y_Real"] == 270 )]
+        target_df = anchor_gt_discretized_aoa_df[(anchor_gt_discretized_aoa_df["X_Real"] == 450) & (anchor_gt_discretized_aoa_df["Y_Real"] == 0 )]
         target_df = dp.calculate_aoa_ground_truth(target_df, position, orientation)
-        # target_df = target_df[target_df["Azimuth"] < 0]
-
-        # plot aoa
         plot_azimuth_distribution(target_df, "Azimuth")
-
-        # delete where Azimuth > 0 
-        
-        print(target_df['Azimuth_Real'].mean(), target_df['Azimuth'].mean())
-
-        # anchor_gt_discretized_df = dp.discretize_by_delta(anchor_gt_df, delta)
-        anchor_gt_discretized_aoa_df = dp.calculate_aoa_ground_truth(anchor_gt_df, position, orientation)
 
         anchors_df_dict[anchor_id] = anchor_gt_discretized_aoa_df
 

@@ -110,7 +110,9 @@ if __name__ == "__main__":
 
     # Rolling features
     ms_gt_df["Azimuth_Error_Abs"] = (ms_gt_df["Azimuth"] - ms_gt_df["Azimuth_Real"]).abs()
-    ms_gt_df["Azimuth_Var"] = ms_gt_df["Azimuth"].rolling(window=window_size).var()
+    ms_gt_df["Azimuth_Abs"] = (ms_gt_df["Azimuth"]).abs()
+    ms_gt_df["Azimuth_Abs_mean"] = ms_gt_df["Azimuth_Abs"].rolling(window=window_size).mean()
+    ms_gt_df["Azimuth_Var"] = ms_gt_df["Azimuth"].rolling(window=window_size).std()
     ms_gt_df["Error_Mean"] = ms_gt_df["Azimuth_Error_Abs"].rolling(window=window_size).mean()
 
     # Nan 제거
@@ -120,7 +122,7 @@ if __name__ == "__main__":
     # ms_gt_df = ms_gt_df[ms_gt_df["Azimuth_Var"] <= 100].copy()
 
     x = ms_gt_df["Azimuth_Var"].values
-    y = ms_gt_df["Error_Mean"].values
+    y = ms_gt_df["Azimuth_Abs_mean"].values
 
     # 2. threshold 후보 설정
     threshold_candidates = np.arange(30, 1500, 5)

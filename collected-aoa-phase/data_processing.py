@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+from scipy.stats import median_abs_deviation, gaussian_kde
+from scipy.signal import find_peaks
 
 def interpolate_ground_truth(gt_df: pd.DataFrame, dt: int) -> pd.DataFrame:
     """
@@ -100,32 +102,116 @@ def calculate_aoa_ground_truth(df: pd.DataFrame, position: list[float, float, fl
 
     return result_df
 
-def discretize_by_delta(df: pd.DataFrame, dt: int = 0) -> pd.DataFrame:
-    """
-    Discretize the data by time intervals (dt).
 
+def modified_z_score_filter(series: pd.Series, z_thresh: float = 3.5) -> pd.Series:
+    med = np.median(series)
+    mad = median_abs_deviation(series)
+
+    if mad == 0:  # Avoid division by zero
+        return series
+    
+    z_scores = 0.6745 * (series - med) / mad
+    return series[np.abs(z_scores) <= z_thresh]
+
+def mode_based_filter(series: pd.Series, mode_window: float = 20.0) -> pd.Series:
+    if len(series) < 2:
+        return series.iloc[0]
+    
+    if np.all(series == series.iloc[0]):
+        return series.iloc[0]
+
+    # Gaussian kernel density estimation to find the mode
+    kde = gaussian_kde(series.dropna())
+    x_vals = np.linspace(series.min(), series.max(), 1000)
+    densities = kde(x_vals)
+    mode_estimate = x_vals[np.argmax(densities)]
+
+    # Filter based on the mode estimate
+    return mode_estimate
+
+def filter_by_primary_mode(data: pd.Series, bandwidth=1.0, threshold_std=1.5):
+    if len(data) < 2:
+        return data
+    
+    if np.all(data == data.iloc[0]):
+        return data
+
+    # KDE로 연속 확률 밀도 함수 추정
+    kde = gaussian_kde(data, bw_method=bandwidth / data.std(ddof=1))
+    x_vals = np.linspace(data.min(), data.max(), 1000)
+    kde_vals = kde(x_vals)
+
+    # 피크 검출
+    peaks, _ = find_peaks(kde_vals)
+    if len(peaks) == 0:
+        raise ValueError("봉우리를 찾을 수 없습니다.")
+
+    # 가장 높은 피크 선택
+    primary_peak_idx = peaks[np.argmax(kde_vals[peaks])]
+    primary_peak = x_vals[primary_peak_idx]
+
+    # 주 피크 기준 범위 설정 (± threshold_std * 표준편차)
+    std_dev = data.std()
+    lower_bound = primary_peak - threshold_std * std_dev
+    upper_bound = primary_peak + threshold_std * std_dev
+
+    # 필터링
+    return data[(data >= lower_bound) & (data <= upper_bound)]
+
+def discretize_by_delta(df: pd.DataFrame, dt: int = 0, filter: bool = True) -> pd.DataFrame:
+    """
+    Generate a new DataFrame using time-bucketed (non-overlapping) windows.
+    
     Parameters:
-        df (pd.DataFrame): Input DataFrame with ['Timestamp', 'X_Real', 'Y_Real'] columns
-        dt (int): Time step in the same unit as 'Timestamp'
+        df (pd.DataFrame): Input DataFrame with required columns
+        delta (int): Time window size in milliseconds
+        start_time (int | None): Start time for filtering (default is None)
+        z_thresh (float): Z-score threshold for outlier removal
+        filter (bool): Whether to apply outlier filtering
 
     Returns:
-        pd.DataFrame: Discretized DataFrame averaged by time bucket. ['Time_Bucket'] column is added.
+        pd.DataFrame: Aggregated DataFrame with computed sliding statistics
     """
-    if not dt:
-        return df
+    # Count the rows where Sequence is not ordered
+    if not df["Sequence"].is_monotonic_increasing:
+        raise ValueError("The Sequence column is not ordered. Please sort the DataFrame by Sequence before using this function.")
 
-    df = df.copy()
 
-    # Create time buckets by discretizing the Timestamp column in dt intervals
-    df["Time_Bucket"] = (df["Timestamp"] // dt) * dt
+    df = df.sort_values("Timestamp").copy().reset_index(drop=True)
+    output_rows = []
 
-    # Compute mean for each unique (Time_Bucket) group
-    discretized_df = df.groupby(["Time_Bucket"], as_index=False).mean(numeric_only=True)
+    # Determine time range
+    start_time = df["Timestamp"].iloc[0]
 
-    # Compute std for each unique (Time_Bucket) group
-    discretized_df["Azimuth_Std"] = df.groupby(["Time_Bucket"])["Azimuth"].std().reset_index(drop=True).fillna(0)
-    discretized_df["1stP_Std"] = df.groupby(["Time_Bucket"])["RSSI"].std().reset_index(drop=True).fillna(0)
+    end_time = df["Timestamp"].iloc[-1]
+    time_bucket = -1
+    current_start = start_time
 
-    discretized_df["Timestamp"] = discretized_df["Time_Bucket"] + dt
+    # Time-bucketed calculation
+    while current_start < end_time:
+        time_bucket += 1
+        current_end = current_start + dt
+        window_df = df[(df["Timestamp"] >= current_start) & (df["Timestamp"] < current_end)]
 
-    return discretized_df
+        if len(window_df) < 2:
+            current_start = current_end
+            continue
+
+        row_data = window_df.mean(numeric_only=True).to_dict()
+        row_data["Time_Bucket"] = time_bucket
+        row_data["Tag"] = window_df["Tag"].iloc[0]
+        row_data["Anchor"] = window_df["Anchor"].iloc[0]
+        row_data["Sequence"] = window_df["Sequence"].iloc[-1]
+        row_data["Timestamp"] = current_end
+
+        # Calculate the mean and variance for RSSI, Azimuth, and Elevation
+        for col in ["RSSI", "Azimuth", "Elevation"]:
+            if col in window_df.columns:
+                row_data[f"{col}_Var"] = window_df[col].var()
+                clean = modified_z_score_filter(window_df[col]) if filter else window_df[col]
+                row_data[col] = clean.mean()
+
+        output_rows.append(row_data)
+        current_start = current_end
+
+    return pd.DataFrame(output_rows)
